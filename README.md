@@ -190,20 +190,15 @@ See [all currently known security limitations](docs/security.md).
 
 ## GitHub publication, ownership and licensing
 
-The current repository is local. The connected GitHub account is `Truja503`, but
-the connector cannot create repositories and GitHub CLI was not installed in the
-execution environment. No remote repository or push is claimed. After installing
-GitHub CLI, run these commands from this directory:
+The repository target is [Truja503/swap-engine](https://github.com/Truja503/swap-engine).
+The commissioning user explicitly authorized keeping this repository public,
+superseding the original private-repository requirement. Future pushes use:
 
 ```bash
-gh auth login
-gh auth status
 npm run secrets:check
-gh repo create Truja503/lqwd-swap-engine --private --source=. --remote=origin --push
-gh repo view Truja503/lqwd-swap-engine --json nameWithOwner,visibility,url
+git push -u origin main
 ```
 
-If the repository already exists, verify it is private before setting an origin
-or pushing. Never push to a public repository. `LICENSE` reserves all rights;
-no public-source license has been selected. Ownership and assignment require the
+`LICENSE` reserves all rights; public visibility does not grant an open-source
+license. Ownership and assignment require the
 applicable written agreement. Dependencies retain their own licenses.

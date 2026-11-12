@@ -14,7 +14,9 @@ in this Windows workspace. This is not evidence about the separate VM's health.
 
 The connected GitHub integration identifies account `Truja503`. Available connector
 tools do not include repository creation or source pushes; `gh` is not installed.
-No remote publication succeeded or is implied by the local commit.
+That initial milestone was committed locally. The user subsequently supplied
+`https://github.com/Truja503/swap-engine` and explicitly authorized public
+publication; origin now points to that repository.
 
 ## Commands and results
 
@@ -56,5 +58,5 @@ not prove consensus acceptance, LND compatibility or actual atomic settlement.
 `.gitignore` excludes runtime state, environment files except the credential-free
 example, keys, cookies, macaroons, wallets, logs and dependencies. A tracked-content
 and history heuristic scanner is provided as `npm run secrets:check`. No real
-credentials were supplied to the implementation or tests. See README for private
-publication commands. No open-source license was chosen.
+credentials were supplied to the implementation or tests. See README for publication
+commands and the user-authorized public repository. No open-source license was chosen.

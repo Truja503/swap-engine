@@ -1,0 +1,24 @@
+[Unit]
+Description=Swap Engine regtest simulation and read-only diagnostics
+After=network.target
+
+[Service]
+Type=simple
+User=truja
+Group=truja
+WorkingDirectory=/home/truja/projects/swap-engine
+ExecStart=/usr/bin/node --env-file=.env.simulation --import tsx src/main.ts
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/truja/projects/swap-engine/data
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

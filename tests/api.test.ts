@@ -19,6 +19,7 @@ test('HTTP schemas, quotes, status, health, liquidity and live funding gate', as
     assert.equal((await fetch(`${url}/v1/quotes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"amountSats":50000,"preimage":"secret"}' })).status, 400);
     const status = await (await fetch(`${url}/v1/swaps/${f.swap.id}`)).json();
     assert.equal(status.state, 'QUOTED'); assert(!('idempotencyKey' in status)); assert(!('lockup' in status));
+    assert.equal(status.display.tone, 'pending'); assert.equal(status.display.terminal, false);
     assert.equal((await fetch(`${url}/v1/swaps/${'0'.repeat(36)}`)).status, 404);
     assert.equal((await fetch(`${url}/v1/liquidity`)).status, 200);
     const request = { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'api-request-1' }, body: JSON.stringify({ quoteId: f.quote.id, paymentHash: f.contract.paymentHash, claimPublicKey: f.contract.claimPublicKey }) };

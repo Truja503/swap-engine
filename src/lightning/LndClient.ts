@@ -1,6 +1,7 @@
 import https from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { hex32 } from '../bitcoin/HtlcBuilder.js';
+import { parseLndInvoice } from './InvoiceParser.js';
 
 export type Invoice = {
   state: 'OPEN' | 'ACCEPTED' | 'SETTLED' | 'CANCELED'; r_hash: string;
@@ -45,7 +46,7 @@ export class LndClient {
     if (!Number.isSafeInteger(sats) || sats < 1 || !Number.isInteger(expirySeconds) || expirySeconds < 60 || expirySeconds > 3600 || !Number.isInteger(cltvDelta) || cltvDelta < 80 || cltvDelta > 2016) throw new Error('Invalid hold invoice limits');
     return this.call<{ payment_request: string }>('/v2/invoices/hodl', { hash: hex32(hash).toString('base64'), value: String(sats), expiry: String(expirySeconds), cltv_expiry: String(cltvDelta), memo: 'LQWD regtest reverse swap' });
   }
-  lookup(hash: string) { hex32(hash); return this.call<Invoice>(`/v1/invoice/${hash}`); }
+  async lookup(hash: string) { hex32(hash); return parseLndInvoice(await this.call(`/v1/invoice/${hash}`)); }
   settle(preimage: string) { return this.call('/v2/invoices/settle', { preimage: hex32(preimage).toString('base64') }); }
   cancel(hash: string) { return this.call('/v2/invoices/cancel', { payment_hash: hex32(hash).toString('base64') }); }
   async incomingLiquidity(): Promise<number> {
@@ -70,9 +71,9 @@ export class LndClient {
             const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
             if (!line.trim()) continue;
             try {
-              const event = JSON.parse(line) as { result?: Invoice; error?: unknown };
+              const event = JSON.parse(line) as { result?: unknown; error?: unknown };
               if (event.error || !event.result) throw new Error('LND stream error');
-              onInvoice(event.result);
+              onInvoice(parseLndInvoice(event.result));
             } catch { req.destroy(new Error('Invalid LND stream event')); return; }
           }
         });

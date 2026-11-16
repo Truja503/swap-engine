@@ -69,8 +69,8 @@ The sample uses Bitcoin cookie authentication with the existing `lqwd-lab` walle
 LND must already have a **local HTTPS REST listener** (usually 8080), a matching
 TLS certificate and a readable macaroon. The supplied gRPC port 10009 is not a
 REST endpoint. Discovery and configuration are manual; this project never edits
-LND configuration. Use a suitably scoped macaroon when supported; the example
-references the existing admin macaroon locally for lab compatibility.
+LND configuration. The application defaults to the existing read-only macaroon;
+credentials stay on the VM and are never copied into the repository.
 
 The API binds only to `127.0.0.1:3000`. `ENABLE_LIVE_SWAPS=true` causes startup to
 fail, rather than bypassing the incomplete observer/recovery boundary. Health
@@ -78,6 +78,35 @@ reports component mode; it does not claim the nodes are ready. For live prefligh
 and exact next steps see [the VM runbook](docs/regtest-runbook.md).
 
 ## API documentation
+
+For the existing Ubuntu VM, see [simulation deployment instructions](docs/ubuntu-deployment.md)
+and the uninstalled [systemd service template](deploy/swap-engine.service).
+`GET /v1/preflight` reports read-only node/wallet/channel diagnostics; it returns
+503 while prerequisites are unresolved. UI, quote and component health endpoints
+remain available. Runtime clients deny all node mutations, even after sync.
+
+### Local estimate interface
+
+Run `npm start` and open **http://127.0.0.1:3000/**. The responsive three-panel
+interface shows Lightning input, swap calculation, and Bitcoin on-chain output.
+It is regtest simulation only and calls `POST /v1/quotes`; it never creates a
+swap, payment invoice, address, or transaction. Quote generation does not require
+running Bitcoin/LND nodes. The server still binds only to loopback.
+
+The input is the HTLC principal in whole sats (10,000–1,000,000). Fees and the
+Lightning invoice total come from the API. Net received is `amountSats - claimFeeSats`;
+net sats lost is `invoiceSats - net received`. For 50,000 sats these are 49,500
+received and 1,250 lost. Funding reserve is not an additional client fee. Estimates
+clear on input changes and expiry; request errors require a fresh estimate.
+On-chain to Lightning is visibly **NOT IMPLEMENTED**. Live swaps remain disabled.
+No frontend build step or additional dependencies are required.
+
+Pure satoshi accounting helpers, implemented by Qwen and independently reviewed,
+are in `src/utils/satoshiMath.ts`. They validate monetary quote fields and invoice
+consistency, calculate net received and total user cost, and exclude the provider's
+funding reserve from that cost. They consume quote values without changing the
+API's fee policy or enabling execution. Tests cover both helper boundaries and
+actual quote endpoint responses.
 
 All amounts are integer satoshis; timestamps are Unix milliseconds. Requests use
 `Content-Type: application/json`, strict object schemas, and an 8 KiB body limit.

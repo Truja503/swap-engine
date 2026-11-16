@@ -8,7 +8,7 @@ export function config() {
     wallet: process.env.BITCOIN_WALLET ?? 'lqwd-lab',
     lndUrl: process.env.LND_REST_URL ?? 'https://127.0.0.1:8080',
     cert: process.env.LND_TLS_CERT_PATH ?? '/home/truja/.lnd/tls.cert',
-    macaroon: process.env.LND_MACAROON_PATH ?? '/home/truja/.lnd/data/chain/bitcoin/regtest/admin.macaroon',
+    macaroon: process.env.LND_MACAROON_PATH ?? '/home/truja/.lnd/data/chain/bitcoin/regtest/readonly.macaroon',
     directory: process.env.DATA_DIR ?? './data', port,
   };
 }

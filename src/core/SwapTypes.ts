@@ -9,7 +9,16 @@ export type Swap = {
   state: SwapState; revision: number; createdAt: number; updatedAt: number;
   invoice?: string; lockup?: { txid: string; hex: string; vout: number };
   claimTxid?: string; refundTxid?: string;
-  pendingAction?: 'CREATE_INVOICE' | 'PREPARE_LOCKUP' | 'BROADCAST_LOCKUP' | 'SETTLE' | 'BROADCAST_REFUND';
+  fundingIntent?: { txid: string; vout: number; valueSats: number; scriptPubKey: string;
+    changeAddress: string; principalSats: number; maxFeeSats: number; unsignedHex?: string;
+    signedHex?: string; fundingTxid?: string; fundingVout?: number; feeSats?: number };
+  clientPayment?: { hash: string; status: 'INTENT' | 'IN_FLIGHT' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'; feeLimitSats: number; feeSats?: number };
+  clientClaimIntent?: { txid: string; destination: string; feeSats: number; status: 'INTENT' | 'BROADCAST' | 'UNKNOWN' };
+  miningIntents?: Array<{ txid: string; fromHeight: number; status: 'INTENT' | 'CONFIRMED'; blockHash?: string }>;
+  pendingAction?: 'CREATE_INVOICE' | 'PREPARE_LOCKUP' | 'BROADCAST_LOCKUP' | 'SETTLE' | 'BROADCAST_REFUND' | 'CANCEL_INVOICE';
   history: Array<{ state: SwapState; at: number }>;
 };
-export type Database = { schema: 1; quotes: Record<string, Quote>; swaps: Record<string, Swap> };
+export type ChainObservation = { fromHeight: number; height: number; blockHash: string;
+  spend?: { txid: string; blockHash: string; height: number } };
+export type Database = { schema: 1; quotes: Record<string, Quote>; swaps: Record<string, Swap>;
+  chainObservations?: Record<string, ChainObservation> };

@@ -32,6 +32,7 @@ export async function setup() {
   const ledger = new Map<string, { hex: string; confirmations: number }>();
   const calls = { funding: 0, broadcast: 0, settle: 0 };
   const ports: SwapPorts = {
+    assertRegtest: async () => {}, // Explicitly fake regtest port; never contacts nodes.
     invoice: async () => ({ state: invoiceState, r_hash: Buffer.from(f.contract.paymentHash, 'hex').toString('base64'), value: String(quote.invoiceSats), amt_paid_sat: String(quote.invoiceSats), payment_request: 'test-invoice', htlcs: [{ state: 'ACCEPTED', expiration_height: 210, amt_msat: String(quote.invoiceSats * 1000) }] }),
     createInvoice: async () => 'test-invoice',
     prepareLockup: async () => { calls.funding++; return { txid: f.tx.getId(), hex: f.tx.toHex(), vout: 0 }; },

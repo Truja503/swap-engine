@@ -40,6 +40,16 @@ test('preflight distinguishes reachable but unsynced nodes and an unloaded exist
   assert.equal(f.calls.length, 7);
 });
 
+test('preflight labels the explicit application mode while preserving read-only flags', async () => {
+  for (const [mode, label] of [['simulation', 'simulation-read-only'], ['regtest', 'regtest-read-only']] as const) {
+    const f = fixtures();
+    const report = await preflight(f.transport, f.transport, 'lqwd-lab', mode);
+    assert.equal(report.mode, label);
+    assert.equal(report.network, 'regtest');
+    for (const flag of [report.liveSwapsEnabled, report.signingEnabled, report.broadcastingEnabled, report.miningEnabled, report.paymentsEnabled]) assert.equal(flag, false);
+  }
+});
+
 test('satisfied diagnostics never enable payments or live swaps', async () => {
   const f = fixtures();
   Object.assign(f.replies.getblockchaininfo as object, { blocks: 100, headers: 100, initialblockdownload: false });
@@ -142,6 +152,30 @@ test('unsynced preflight is 503 while UI, liveness and quotes remain available',
     assert.equal((await fetch(`${base}/v1/quotes`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"amountSats":50000}' })).status, 201);
     assert.equal((await fetch(`${base}/v1/liquidity`)).status, 503);
     const disabled = await fetch(`${base}/v1/swaps/reverse`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'disabled-test' },
+      body: JSON.stringify({ quoteId: f.quote.id, paymentHash: f.contract.paymentHash, claimPublicKey: f.contract.claimPublicKey }) });
+    assert.equal(disabled.status, 503);
+    assert.match((await disabled.json()).error, /LIVE_SWAPS_DISABLED/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await f.cleanup();
+  }
+});
+
+test('regtest HTTP preflight matches health mode and keeps the reverse gate at 503', async () => {
+  const f = await setup(); const probes = fixtures();
+  const server = createApi(f.manager, async () => ({ onchainSats: 0, incomingSats: 0 }),
+    () => preflight(probes.transport, probes.transport, 'lqwd-lab', 'regtest'), 'regtest');
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const health = await (await fetch(`${base}/v1/health`)).json();
+    assert.equal(health.mode, 'regtest');
+    const response = await fetch(`${base}/v1/preflight`);
+    assert.equal(response.status, 503);
+    const report = await response.json();
+    assert.equal(report.mode, 'regtest-read-only');
+    assert.equal(report.liveSwapsEnabled, false);
+    const disabled = await fetch(`${base}/v1/swaps/reverse`, { method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'regtest-label-test' },
       body: JSON.stringify({ quoteId: f.quote.id, paymentHash: f.contract.paymentHash, claimPublicKey: f.contract.claimPublicKey }) });
     assert.equal(disabled.status, 503);
     assert.match((await disabled.json()).error, /LIVE_SWAPS_DISABLED/);

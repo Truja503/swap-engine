@@ -20,7 +20,7 @@ if (c.mode === 'regtest') {
     const [onchainSats, incomingSats] = await Promise.all([bitcoin.liquidity(), lnd.incomingLiquidity()]);
     return { onchainSats, incomingSats };
   };
-  diagnostics = () => preflight(bitcoin, lnd, c.wallet);
+  diagnostics = () => preflight(bitcoin, lnd, c.wallet, c.mode);
 } else {
   liquidity = async () => { throw new Error('SIMULATION_MODE_HAS_NO_NODE_CONNECTIVITY'); };
 }

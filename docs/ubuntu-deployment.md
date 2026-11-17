@@ -1,4 +1,4 @@
-# Ubuntu regtest simulation deployment
+# Ubuntu regtest read-only deployment
 
 Use the existing Node.js 22 runtime and existing repository at
 `/home/truja/projects/swap-engine`. Do not reset, load, create or migrate a wallet;
@@ -14,14 +14,16 @@ npm run build
 npm test
 mkdir -p data
 chmod 700 data
-# Copy once, only if .env.simulation does not already exist:
-test -e .env.simulation || cp deploy/simulation.env.example .env.simulation
-node --env-file=.env.simulation --import tsx scripts/inspect.ts
+# Copy once, only if .env.regtest does not already exist:
+test -e .env.regtest || cp deploy/regtest.env.example .env.regtest
+# The example sets APP_MODE=regtest for this read-only deployment. SIMULATION is
+# the offline default; use deploy/simulation.env.example as .env.simulation for it.
+node --env-file=.env.regtest --import tsx scripts/inspect.ts
 # A nonzero preflight exit is expected while synchronization/wallet state is unresolved.
-node --env-file=.env.simulation --import tsx src/main.ts
+node --env-file=.env.regtest --import tsx src/main.ts
 ```
 
-Review paths in the repo-local `.env.simulation` without copying credential
+Review paths in the repo-local `.env.regtest` without copying credential
 contents. The existing Bitcoin cookie, TLS certificate and read-only LND macaroon
 stay at their existing VM paths and are read locally by the clients. TLS
 verification stays enabled; if the certificate does not cover 127.0.0.1, use a
@@ -41,6 +43,13 @@ curl -f -H 'Content-Type: application/json' \
   -d '{"amountSats":50000}' http://127.0.0.1:3000/v1/quotes
 curl -sS -w '\nHTTP %{http_code}\n' http://127.0.0.1:3000/v1/preflight
 ```
+
+This deployment uses `.env.regtest` with `APP_MODE=regtest`, so it uses only the
+existing loopback-only read-only Core/LND clients and real preflight diagnostics.
+`.env.simulation` with `APP_MODE=simulation` performs no node connectivity and is
+labeled `"mode":"simulation"` in `/v1/health`; it returns 503
+`DIAGNOSTICS_NOT_CONFIGURED` for preflight. Mainnet is rejected at startup, and
+`POST /v1/swaps/reverse` remains 503 in both modes.
 
 Health is process/component liveness only, not readiness. Preflight returns 503
 with sanitized diagnostics while prerequisites are unresolved; its CLI exits 1.
@@ -100,7 +109,8 @@ without Git merge/push, node configuration changes or service installation. Nati
 v22.22.1 ran `npm ci`, `npm run build` and the automated tests (49/49 passed). The systemd
 template passed `systemd-analyze verify` with exit 0; it was not installed,
 started or enabled. A standalone application process was started with
-`/usr/bin/node --env-file=.env.simulation --import tsx src/main.ts`.
+`/usr/bin/node --env-file=.env.regtest --import tsx src/main.ts` (before the
+example-split this regtest deployment used the file named `.env.simulation`).
 Its PID and output are recorded in `data/simulation.pid` and
 `data/simulation.log`; do not start a second process against the same store.
 

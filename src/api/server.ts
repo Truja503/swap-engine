@@ -6,6 +6,7 @@ import { QuoteRequest, QuoteResponse, ReverseRequest, SwapResponse, HealthRespon
 import { ZodError } from 'zod';
 import { readFile } from 'node:fs/promises';
 import type { preflight } from '../diagnostics/preflight.js';
+import type { ApplicationMode } from '../config.js';
 import { describeSwapState } from '../ui/swapStatus.js';
 
 const webAssets = new Map([
@@ -20,7 +21,7 @@ async function body(req: IncomingMessage): Promise<unknown> {
   for await (const chunk of req) { text += chunk.toString(); if (Buffer.byteLength(text) > 8192) throw new SyntaxError('Body too large'); }
   return JSON.parse(text);
 }
-export function createApi(manager: SwapManager, liquidity: () => Promise<Balances>, diagnostics?: () => ReturnType<typeof preflight>) {
+export function createApi(manager: SwapManager, liquidity: () => Promise<Balances>, diagnostics?: () => ReturnType<typeof preflight>, mode: ApplicationMode = 'simulation') {
   const server = createServer(async (req, res) => {
     const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
     try {
@@ -31,7 +32,7 @@ export function createApi(manager: SwapManager, liquidity: () => Promise<Balance
         res.writeHead(200, { 'content-type': asset[1]!, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" });
         return res.end(content);
       }
-      if (req.method === 'GET' && path === '/v1/health') return send(200, HealthResponse.parse({ status: 'components-only', liveSwapsEnabled: false, network: 'regtest' }));
+      if (req.method === 'GET' && path === '/v1/health') return send(200, HealthResponse.parse({ status: 'components-only', liveSwapsEnabled: false, readOnly: true, network: 'regtest', mode }));
       if (req.method === 'GET' && path === '/v1/preflight') {
         if (!diagnostics) return send(503, ErrorResponse.parse({ error: 'DIAGNOSTICS_NOT_CONFIGURED' }));
         const report = await diagnostics();

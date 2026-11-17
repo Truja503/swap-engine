@@ -46,7 +46,7 @@
 - `scripts/verify-readonly.ts` tests an existing confirmed transaction, unknown
   rejection, any existing mempool sample and optional historical exact-spend
   discovery without generating transactions. Run on the VM with
-  `node --env-file=.env.simulation --import tsx scripts/verify-readonly.ts --find-spend`.
+  `node --env-file=.env.regtest --import tsx scripts/verify-readonly.ts --find-spend`.
 
 The HTTP creation gate and read-only runtime remain intact. No new live action
 adapter is wired into the service. Observation and audits require explicit

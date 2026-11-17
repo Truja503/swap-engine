@@ -58,12 +58,16 @@ chain data, create replacement wallets, overwrite LND configuration, or close ch
 npm ci
 npm run build
 npm test
-cp .env.example .env
-# Review paths locally; .env contains file paths, never copied credentials.
-# Node does not automatically load .env:
-node --env-file=.env --import tsx scripts/inspect.ts
-node --env-file=.env --import tsx src/main.ts
+cp deploy/regtest.env.example .env.regtest
+# Review paths locally; .env.regtest contains file paths, never copied credentials.
+# Node does not automatically load .env.regtest:
+node --env-file=.env.regtest --import tsx scripts/inspect.ts
+node --env-file=.env.regtest --import tsx src/main.ts
 ```
+
+For offline simulation with no node connectivity, copy
+`deploy/simulation.env.example` to `.env.simulation` and use
+`node --env-file=.env.simulation --import tsx src/main.ts` instead.
 
 The sample uses Bitcoin cookie authentication with the existing `lqwd-lab` wallet.
 LND must already have a **local HTTPS REST listener** (usually 8080), a matching
@@ -73,17 +77,22 @@ LND configuration. The application defaults to the existing read-only macaroon;
 credentials stay on the VM and are never copied into the repository.
 
 The API binds only to `127.0.0.1:3000`. `ENABLE_LIVE_SWAPS=true` causes startup to
-fail, rather than bypassing the incomplete observer/recovery boundary. Health
-reports component mode; it does not claim the nodes are ready. For live preflight
-and exact next steps see [the VM runbook](docs/regtest-runbook.md).
+fail, rather than bypassing the incomplete observer/recovery boundary. The explicit
+`APP_MODE` selects `simulation` (default; no node connectivity, clearly labeled in
+health and startup output) or `regtest` (read-only deployment; loopback-only
+Core/LND clients and real preflight diagnostics). `mainnet` and other modes are
+rejected. Health reports component mode; it does not claim the nodes are ready. For
+live preflight and exact next steps see [the VM runbook](docs/regtest-runbook.md).
 
 ## API documentation
 
-For the existing Ubuntu VM, see [simulation deployment instructions](docs/ubuntu-deployment.md)
+For the existing Ubuntu VM, see [regtest read-only deployment instructions](docs/ubuntu-deployment.md)
 and the uninstalled [systemd service template](deploy/swap-engine.service).
-`GET /v1/preflight` reports read-only node/wallet/channel diagnostics; it returns
-503 while prerequisites are unresolved. UI, quote and component health endpoints
-remain available. Runtime clients deny all node mutations, even after sync.
+`GET /v1/preflight` reports read-only node/wallet/channel diagnostics in `regtest`
+mode; it returns 503 while prerequisites are unresolved, and 503 with
+`DIAGNOSTICS_NOT_CONFIGURED` in offline `simulation` mode. UI, quote and component
+health endpoints remain available. Runtime clients deny all node mutations, even
+after sync. `POST /v1/swaps/reverse` remains 503 in both modes.
 
 ### Local estimate interface
 
@@ -118,7 +127,7 @@ preimage. Quotes are estimates; they do not reserve liquidity.
 | `POST /v1/quotes` | `{ "amountSats": 50000 }` | 201: quote below |
 | `POST /v1/swaps/reverse` | `{ "quoteId": "UUID", "paymentHash": "64 lowercase hex", "claimPublicKey": "compressed hex key" }`, `Idempotency-Key: unique-key` | 503: `LIVE_SWAPS_DISABLED_OBSERVER_AND_RECOVERY_NOT_VERIFIED` |
 | `GET /v1/swaps/:id` | UUID path | 200: public state, quote, contract, optional invoice and transaction IDs; 404 if absent |
-| `GET /v1/health` | None | 200: `{ "status": "components-only", "liveSwapsEnabled": false, "network": "regtest" }` |
+| `GET /v1/health` | None | 200: `{ "status": "components-only", "liveSwapsEnabled": false, "readOnly": true, "network": "regtest", "mode": "simulation" }` (or `"mode": "regtest"`) |
 | `GET /v1/liquidity` | None | 200: available onchainSats/incomingSats after reservations; 503 if nodes unavailable |
 
 ```bash

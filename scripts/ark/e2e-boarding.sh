@@ -43,10 +43,12 @@ boarding() {
   funding_preflight "$addr" 200000 "$dust"
   # `run_dir` is an exclusive, permanent attempt fence, claimed by the
   # harness before reaching this function. Never repeat sendtoaddress.
-  jq -nc --arg addr "$addr" '{address:$addr, amount_sats:200000}' > "$run_dir/funding-intent.json"
+  (set -o noclobber; jq -nc --arg addr "$addr" '{address:$addr, amount_sats:200000}' > "$run_dir/funding-intent.json") &&
+    sync -f "$run_dir/funding-intent.json" || fail "cannot durably fence boarding intent"
   funding=$(miner sendtoaddress "$addr" 0.002 ark-lab-e2e-boarding)
   [[ "$funding" =~ ^[0-9a-f]{64}$ ]] || fail "ambiguous funding; reconcile original, never re-fund"
-  printf '%s\n' "$funding" > "$run_dir/funding-txid"
+  (set -o noclobber; printf '%s\n' "$funding" > "$run_dir/funding-txid") &&
+    sync -f "$run_dir/funding-txid" || fail "cannot record boarding funding txid"
   mine 1
   raw=$(core getrawtransaction "$funding" 1)
   vout=$(jq -er --arg addr "$addr" '.vout[] | select(.scriptPubKey.address == $addr and .value == 0.002) | .n' <<<"$raw")

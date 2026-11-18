@@ -9,11 +9,12 @@ use ark_core::server::Info;
 use bitcoin::{Network, OutPoint};
 use blockchain::{RegtestBlockchain, ESPLORA};
 use serde_json::{json, Value};
-use std::{net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
+use std::{future::Future, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
 use wallet_store::WalletStore;
 
 const OPERATOR: &str = "http://127.0.0.1:37070";
 const TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const ROUND_DEADLINE: Duration = Duration::from_secs(120);
 
 #[derive(Debug, thiserror::Error)]
 pub enum LabError {
@@ -61,6 +62,16 @@ pub enum Action {
     ListVtxos,
     Restore,
     Board(OutPoint),
+}
+
+pub(crate) async fn bounded_submission<T, E>(
+    deadline: Duration,
+    submission: impl Future<Output = std::result::Result<T, E>>,
+) -> Result<T> {
+    tokio::time::timeout(deadline, submission)
+        .await
+        .map_err(|_| LabError::SubmissionUncertain)?
+        .map_err(|_| LabError::SubmissionUncertain)
 }
 
 fn regtest(info: &Info) -> Result<()> {
@@ -238,12 +249,14 @@ pub async fn run(repo: &Path, action: Action, wallets: &[WalletId]) -> Result<Va
             Action::Initialize | Action::Addresses => addresses(&client).await?,
             Action::Balance => balance(&client).await?,
             Action::ListVtxos => vtxos(&client).await?,
+<<<<<<< HEAD
             Action::Board(input) => {
                 let mut rng = bitcoin::secp256k1::rand::thread_rng();
-                let commitment = client
-                    .settle_vtxos(&mut rng, &[], &[input])
-                    .await
-                    .map_err(|_| LabError::SubmissionUncertain)?;
+                let commitment = bounded_submission(
+                    ROUND_DEADLINE,
+                    client.settle_vtxos(&mut rng, &[], &[input]),
+                )
+                .await?;
                 json!({"input": input.to_string(), "commitment_txid": commitment})
             }
             Action::Restore => {
@@ -278,5 +291,16 @@ mod tests {
             error.to_string(),
             "ArkOperatorUnavailable: could not query the local Arkade operator"
         );
+    }
+
+    #[tokio::test]
+    async fn bounded_submission_timeout_is_uncertain() {
+        let error = bounded_submission(
+            Duration::ZERO,
+            std::future::pending::<std::result::Result<(), ()>>(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, LabError::SubmissionUncertain));
     }
 }

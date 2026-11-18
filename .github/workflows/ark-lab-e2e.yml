@@ -34,6 +34,18 @@ jobs:
       - name: Stop stack without deleting state
         if: always()
         run: npm run ark:stop
+      - name: Validate public E2E evidence before upload
+        if: always()
+        run: |
+          for file in matrix.json boarding.json transfer.json offboard.json renewal.json; do
+            path="data/ark/e2e/evidence/$file"
+            [ -f "$path" ] || continue
+            jq -e 'type == "object"' "$path" >/dev/null
+            if grep -Eqi '(mnemonic|xprv|private_key|rpcpassword|ark_lab_|-----begin)' "$path"; then
+              echo "Unexpected sensitive token in $path" >&2
+              exit 1
+            fi
+          done
       - name: Upload only public evidence (no data directories or service logs)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

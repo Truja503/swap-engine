@@ -1,4 +1,5 @@
 mod blockchain;
+mod transfer;
 mod wallet_store;
 
 use ark_bdk_wallet::Wallet;
@@ -6,7 +7,7 @@ use ark_client::{
     BoltzReferralId, Client, InMemorySwapStorage, OfflineClient, OfflineClientConfig,
 };
 use ark_core::server::Info;
-use bitcoin::{Network, OutPoint};
+use bitcoin::{Network, OutPoint, Txid};
 use blockchain::{RegtestBlockchain, ESPLORA};
 use serde_json::{json, Value};
 use std::{future::Future, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
@@ -34,6 +35,10 @@ pub enum LabError {
     Sdk(&'static str),
     #[error("ArkSubmissionUncertain: reconcile the original input; do not repeat funding or submit a replacement")]
     SubmissionUncertain,
+    #[error("ArkInputNotSpendable: missing, consumed, or stale VTXO")]
+    InputNotSpendable,
+    #[error("ArkInvalidAmount: amount or change outside supported range or insufficient input")]
+    InvalidAmount,
 }
 
 type Result<T> = std::result::Result<T, LabError>;
@@ -54,7 +59,6 @@ impl WalletId {
     }
 }
 
-#[derive(Clone, Copy)]
 pub enum Action {
     Initialize,
     Addresses,
@@ -62,6 +66,11 @@ pub enum Action {
     ListVtxos,
     Restore,
     Board(OutPoint),
+    TransferSubmit(OutPoint, u64),
+    Pending,
+    TransferFinalize(Txid),
+    VerifySpent(OutPoint, u64),
+    SettleVtxo(OutPoint),
 }
 
 pub(crate) async fn bounded_submission<T, E>(
@@ -227,6 +236,7 @@ async fn vtxos(client: &SdkClient) -> Result<Value> {
                 "created_at": v.created_at,
                 "expires_at": v.expires_at,
                 "spent_by": v.spent_by,
+                "ark_txid": v.ark_txid,
                 "settled_by": v.settled_by
             }),
         ));
@@ -245,20 +255,35 @@ pub async fn run(repo: &Path, action: Action, wallets: &[WalletId]) -> Result<Va
         let create = matches!(action, Action::Initialize);
         let store = WalletStore::open(repo, id.name(), create)?;
         let client = connect(&store, create).await?;
-        let data = match action {
+        let data = match &action {
             Action::Initialize | Action::Addresses => addresses(&client).await?,
             Action::Balance => balance(&client).await?,
             Action::ListVtxos => vtxos(&client).await?,
-<<<<<<< HEAD
-            Action::Board(input) => {
+            Action::Board(input) | Action::SettleVtxo(input) => {
                 let mut rng = bitcoin::secp256k1::rand::thread_rng();
+                let (vtxos, boarding) = if matches!(action, Action::Board(_)) {
+                    (&[][..], std::slice::from_ref(input))
+                } else {
+                    (std::slice::from_ref(input), &[][..])
+                };
                 let commitment = bounded_submission(
                     ROUND_DEADLINE,
-                    client.settle_vtxos(&mut rng, &[], &[input]),
+                    client.settle_vtxos(&mut rng, vtxos, boarding),
                 )
                 .await?;
                 json!({"input": input.to_string(), "commitment_txid": commitment})
             }
+            Action::TransferSubmit(input, sats) | Action::VerifySpent(input, sats) => {
+                let bob_store = WalletStore::open(repo, WalletId::Bob.name(), false)?;
+                let bob = connect(&bob_store, false).await?;
+                if matches!(action, Action::TransferSubmit(..)) {
+                    transfer::submit(&client, &bob, *input, *sats).await?
+                } else {
+                    transfer::verify_spent(&client, &bob, *input, *sats).await?
+                }
+            }
+            Action::Pending => transfer::pending(&client).await?,
+            Action::TransferFinalize(txid) => transfer::finalize(&client, *txid).await?,
             Action::Restore => {
                 let report = client
                     .restore_contracts(ark_client::DEFAULT_GAP_LIMIT)

@@ -28,6 +28,22 @@ enum Command {
         wallet: WalletId,
         input: bitcoin::OutPoint,
     },
+    TransferSubmit {
+        input: bitcoin::OutPoint,
+        sats: u64,
+    },
+    Pending,
+    TransferFinalize {
+        txid: bitcoin::Txid,
+    },
+    VerifySpent {
+        input: bitcoin::OutPoint,
+        sats: u64,
+    },
+    SettleVtxo {
+        wallet: WalletId,
+        input: bitcoin::OutPoint,
+    },
 }
 
 #[tokio::main]
@@ -39,6 +55,17 @@ async fn main() -> ExitCode {
         Command::ListVtxos { wallet } => (Action::ListVtxos, wallet),
         Command::Restore { wallet } => (Action::Restore, Some(wallet)),
         Command::Board { wallet, input } => (Action::Board(input), Some(wallet)),
+        Command::TransferSubmit { input, sats } => {
+            (Action::TransferSubmit(input, sats), Some(WalletId::Alice))
+        }
+        Command::Pending => (Action::Pending, Some(WalletId::Alice)),
+        Command::TransferFinalize { txid } => {
+            (Action::TransferFinalize(txid), Some(WalletId::Alice))
+        }
+        Command::VerifySpent { input, sats } => {
+            (Action::VerifySpent(input, sats), Some(WalletId::Alice))
+        }
+        Command::SettleVtxo { wallet, input } => (Action::SettleVtxo(input), Some(wallet)),
     };
     let both = [WalletId::Alice, WalletId::Bob];
     let repo = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));

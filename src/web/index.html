@@ -109,10 +109,10 @@
   <section id="account" data-view hidden aria-labelledby="account-title" class="subpage">
     <h1 id="account-title" tabindex="-1">Account.</h1>
     <article class="panel inset" id="signin">
-      <div class="panel-header"><h2>Secure sign-in</h2></div>
-      <form id="login-form" class="stack-form" method="post" action="/v1/auth/login">
-        <div><label for="username">Username</label><input type="text" id="username" name="username" autocomplete="username" required disabled></div>
-        <div><label for="password">Password</label><input type="password" id="password" name="password" autocomplete="current-password" required disabled></div>
+      <div class="panel-header"><h2 id="signin-title">Secure sign-in</h2></div>
+      <form id="login-form" class="stack-form" method="post" action="/v1/auth/login" aria-labelledby="signin-title" aria-describedby="login-status">
+        <div><label for="username">Username</label><input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+        <div><label for="password">Password</label><input type="password" id="password" name="password" autocomplete="current-password" required></div>
         <button type="submit" class="primary" disabled>Sign in <span aria-hidden="true">↗</span></button>
       </form>
       <p id="login-status" class="status" role="status">Checking session…</p>

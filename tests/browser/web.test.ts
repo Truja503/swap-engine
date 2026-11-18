@@ -253,6 +253,51 @@ function session(role: 'USER' | 'ADMIN') {
   return { user: { id: 'test-user', username: 'test operator', role }, csrfToken: 'test-csrf', expiresAt: Date.now() + 60_000 };
 }
 
+test('Account accepts input during session checks and supports retry when auth routes are missing', async context => {
+  const f = await setup();
+  context.after(f.cleanup);
+  const server = createApi(f.manager, async () => { throw new Error('Offline test port'); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  context.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
+  context.after(() => browser.close());
+  const page = await browser.newPage({ reducedMotion: 'reduce' });
+  let resumeSession!: () => void;
+  const pending = new Promise<void>(resolve => { resumeSession = resolve; });
+  await page.route('**/v1/auth/session', async route => {
+    await pending;
+    await route.continue();
+  });
+  await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#account`);
+  const username = page.getByLabel('Username', { exact: true });
+  const password = page.getByLabel('Password', { exact: true });
+  const submit = page.getByRole('button', { name: 'Sign in', exact: true });
+  await username.pressSequentially('test-operator');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator(':focus').getAttribute('id'), 'password');
+  await password.pressSequentially('fixture-only');
+  assert.equal(await submit.isDisabled(), true);
+  resumeSession();
+  await page.getByText('The session service is unavailable. You can try signing in.', { exact: true }).waitFor();
+  await submit.waitFor();
+  assert.equal(await submit.isEnabled(), true);
+  assert.equal(await username.inputValue(), 'test-operator');
+  const response = page.waitForResponse(reply => reply.url().endsWith('/v1/auth/login'));
+  await password.press('Enter');
+  const denied = await response;
+  assert.equal(denied.status(), 404);
+  assert.deepEqual(denied.request().postDataJSON(), { username: 'test-operator', password: 'fixture-only' });
+  await page.getByText('Sign-in service unavailable. Try again.', { exact: true }).waitFor();
+  assert.equal(await username.inputValue(), 'test-operator');
+  assert.equal(await password.inputValue(), '');
+  assert.equal(await page.locator(':focus').getAttribute('id'), 'password');
+  assert.equal(await submit.isEnabled(), true);
+  assert.equal(await page.locator('#account-dashboard').isVisible(), false);
+  await audit(page);
+  await page.screenshot({ path: evidence + '/account-signin-unavailable.png' });
+});
+
 test('login success requires independent session verification and logout is CSRF protected', async context => {
   const f = await setup();
   context.after(f.cleanup);

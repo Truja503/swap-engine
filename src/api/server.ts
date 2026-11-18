@@ -38,7 +38,7 @@ export function createApi(
     operations?: () => Promise<OperationsBalances>;
   } = {},
 ) {
-  const auth = new Sessions(authOptions);
+  const auth = new Sessions(authOptions, mode);
   const server = createServer(async (req, res) => {
     const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
     const noContent = () => { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); };
@@ -69,7 +69,7 @@ export function createApi(
         if (session ? !auth.verifyCsrf(req, session) : req.headers.origin !== undefined && !auth.sameOrigin(req)) return failed();
         try {
           const input = LoginRequest.parse(await body(req));
-          const next = await auth.login(input.username, input.password);
+          const next = await auth.login(req, input.username, input.password);
           if (!next) return failed();
           if (session) auth.revoke(session);
           res.setHeader('set-cookie', auth.cookie(next));

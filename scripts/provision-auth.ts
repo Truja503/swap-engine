@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { hashPassword, Role, Username } from '../src/auth/credentials.js';
 import { AccountFile, defaultAuthStorePath, readAccounts } from '../src/auth/store.js';
+import { applicationMode } from '../src/config.js';
 
 const run = promisify(execFile);
 
@@ -19,12 +20,33 @@ async function restrictWindowsFile(path: string): Promise<void> {
   await run('icacls.exe', [path, '/inheritance:r', '/grant:r', `*${sid}:F`], { windowsHide: true });
 }
 
-export async function provisionAccount(storePath: string, username: string, role: string, password: string): Promise<void> {
+export async function provisionAccount(
+  storePath: string, username: string, role: string, password: string,
+  { allowShortLabPassword = false, env = process.env }: {
+    allowShortLabPassword?: boolean;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<void> {
+  if (allowShortLabPassword) {
+    const mode = applicationMode(env.APP_MODE ?? 'simulation');
+    if ((mode !== 'simulation' && mode !== 'regtest') || role !== 'ADMIN' ||
+        (env.ENABLE_LIVE_SWAPS && env.ENABLE_LIVE_SWAPS !== 'false')) {
+      throw new Error('Short lab passwords require an ADMIN account in simulation or read-only regtest');
+    }
+    if (env.AUTH_ORIGIN !== undefined) {
+      const origin = new URL(env.AUTH_ORIGIN);
+      if (origin.origin !== env.AUTH_ORIGIN || origin.protocol !== 'http:' ||
+          !['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)) {
+        throw new Error('Short lab passwords require a direct loopback HTTP origin');
+      }
+    }
+  }
   const account = {
     id: randomUUID(),
     username: Username.parse(username),
     role: Role.parse(role),
-    passwordHash: await hashPassword(password),
+    passwordHash: await hashPassword(password, allowShortLabPassword ? 4 : 12),
+    ...(allowShortLabPassword ? { localLabOnly: true as const } : {}),
   };
   const path = resolve(storePath);
   const directory = dirname(path);
@@ -95,8 +117,9 @@ export function readHiddenPassword(input: NodeJS.ReadStream, output: NodeJS.Writ
 }
 
 async function main(): Promise<void> {
-  if (process.argv.length !== 2 || !process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error('Run this command in an interactive terminal without arguments');
+  const allowShortLabPassword = process.argv.length === 3 && process.argv[2] === '--allow-short-lab-password';
+  if ((!allowShortLabPassword && process.argv.length !== 2) || !process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('Run this command in an interactive terminal');
   }
   const prompt = createInterface({ input: process.stdin, output: process.stdout, terminal: true, historySize: 0 });
   let username: string;
@@ -109,7 +132,7 @@ async function main(): Promise<void> {
   }
   let password = await readHiddenPassword(process.stdin, process.stdout);
   try {
-    await provisionAccount(defaultAuthStorePath(), username, role, password);
+    await provisionAccount(defaultAuthStorePath(), username, role, password, { allowShortLabPassword });
   } finally {
     password = '';
   }
@@ -118,7 +141,7 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(() => {
-    process.stderr.write('Provisioning failed. Use a unique valid username, USER or ADMIN, and a password of 12–1024 characters (at most 1024 bytes).\n');
+    process.stderr.write('Provisioning failed. Use a unique valid username and a password of at least 12 characters (at most 1024 bytes). The --allow-short-lab-password flag accepts at least 4 characters for a local ADMIN account in simulation or read-only regtest.\n');
     process.exitCode = 1;
   });
 }

@@ -2,11 +2,22 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { verifyPassword, type Role } from './credentials.js';
 import { defaultAuthStorePath, readAccounts, type Account } from './store.js';
+import type { ApplicationMode } from '../config.js';
 
 const cookieName = 'swap_session';
 const tokenPattern = /^[a-f0-9]{64}$/;
 const loginWindowMs = 60_000;
 const maxSessions = 1024;
+const loopbackAddresses = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+function loopbackOrigin(req: IncomingMessage): string | undefined {
+  const host = req.headers.host;
+  if (!host || req.headersDistinct.host?.length !== 1) return;
+  const port = req.socket.localPort;
+  const authority = ['localhost', '127.0.0.1', '[::1]']
+    .map(name => port === 80 ? name : `${name}:${port}`).find(candidate => candidate === host);
+  if (authority) return `http://${authority}`;
+}
 
 interface Session {
   id: string;
@@ -33,7 +44,7 @@ export class Sessions {
   private readonly ttlMs: number;
   private readonly now: () => number;
 
-  constructor(options: AuthOptions) {
+  constructor(options: AuthOptions, private readonly mode: ApplicationMode) {
     this.storePath = options.storePath ?? defaultAuthStorePath();
     this.origin = options.origin ?? process.env.AUTH_ORIGIN;
     if (this.origin !== undefined) {
@@ -52,14 +63,16 @@ export class Sessions {
   sameOrigin(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
     if (!origin || req.headersDistinct.origin?.length !== 1) return false;
-    if (this.origin !== undefined) return origin === this.origin;
-    const host = req.headers.host;
-    if (!host || req.headersDistinct.host?.length !== 1) return false;
-    const port = req.socket.localPort;
-    return ['localhost', '127.0.0.1', '[::1]'].some(name => {
-      const authority = port === 80 ? name : `${name}:${port}`;
-      return host === authority && origin === `http://${authority}`;
-    });
+    return origin === (this.origin ?? loopbackOrigin(req));
+  }
+
+  private isLocalLabRequest(req: IncomingMessage): boolean {
+    if (this.mode !== 'simulation' && this.mode !== 'regtest') return false;
+    if (!loopbackAddresses.has(req.socket.remoteAddress ?? '') || !loopbackAddresses.has(req.socket.localAddress ?? '')) return false;
+    if (Object.keys(req.headers).some(name => /^(forwarded$|x-forwarded-|x-real-ip$|via$)/.test(name))) return false;
+    const directOrigin = loopbackOrigin(req);
+    return directOrigin !== undefined && (this.origin === undefined || this.origin === directOrigin) &&
+      (req.headers.origin === undefined || this.sameOrigin(req));
   }
 
   allowLoginAttempt(req: IncomingMessage): boolean {
@@ -77,13 +90,14 @@ export class Sessions {
     return true;
   }
 
-  async login(username: string, password: string): Promise<Session | undefined> {
+  async login(req: IncomingMessage, username: string, password: string): Promise<Session | undefined> {
     if (this.pendingLogins >= 4) return;
     this.pendingLogins++;
     try {
       const accounts = await this.accounts();
       const normalizedUsername = username.toLowerCase();
-      const account = accounts.find(user => user.username.toLowerCase() === normalizedUsername);
+      const account = accounts.find(user => user.username.toLowerCase() === normalizedUsername &&
+        (!user.localLabOnly || this.isLocalLabRequest(req)));
       if (!await verifyPassword(password, account?.passwordHash) || !account) return;
       const now = this.now();
       for (const [id, session] of this.sessions) {
@@ -110,6 +124,7 @@ export class Sessions {
     if (matches.length !== 1 || !id || !tokenPattern.test(id)) return;
     const session = this.sessions.get(id);
     if (!session) return;
+    if (session.account.localLabOnly && !this.isLocalLabRequest(req)) return;
     if (session.expiresAt <= this.now()) {
       this.sessions.delete(id);
       return;
@@ -118,6 +133,7 @@ export class Sessions {
     const account = accounts.find(user => user.id === session.account.id);
     if (this.sessions.get(id) !== session || session.expiresAt <= this.now() || !account ||
         account.role !== session.account.role || account.username !== session.account.username ||
+        account.localLabOnly !== session.account.localLabOnly ||
         account.passwordHash !== session.account.passwordHash) {
       this.sessions.delete(id);
       return;

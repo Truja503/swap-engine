@@ -17,9 +17,9 @@ function derive(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  if (!Password.safeParse(password).success || [...password].length < 12) {
-    throw new Error('Password must contain at least 12 characters and at most 1024 bytes');
+export async function hashPassword(password: string, minimumLength: 4 | 12 = 12): Promise<string> {
+  if (!Password.safeParse(password).success || [...password].length < minimumLength) {
+    throw new Error(`Password must contain at least ${minimumLength} characters and at most 1024 bytes`);
   }
   const salt = randomBytes(16);
   const key = await derive(password, salt);

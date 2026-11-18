@@ -9,6 +9,7 @@ export const Account = z.object({
   username: Username,
   role: Role,
   passwordHash: PasswordHash,
+  localLabOnly: z.literal(true).optional(),
 }).strict();
 export type Account = z.infer<typeof Account>;
 

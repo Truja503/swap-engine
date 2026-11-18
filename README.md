@@ -102,6 +102,16 @@ scrypt hashes in `data/auth/users.json` by default. If you set `AUTH_STORE_PATH`
 use the same path when provisioning and starting the server. When the override is
 in `.env`, provision with `node --env-file=.env --import tsx scripts/provision-auth.ts`.
 
+For an isolated simulation or read-only regtest lab, the explicit
+`--allow-short-lab-password` option accepts at least four characters for an
+`ADMIN` account. Use the same hidden prompt and keep the preview on direct
+loopback HTTP, without a proxy or tunnel. Accounts provisioned with this option
+are restricted to direct loopback requests. The default remains 12 characters.
+
+```bash
+npm exec -- tsx scripts/provision-auth.ts --allow-short-lab-password
+```
+
 The API loads local accounts on sign-in. Sessions last one hour and expire on
 server restart. Keep the API on the isolated regtest loopback interface and use
 the same origin for the application and API requests.

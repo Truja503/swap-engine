@@ -199,6 +199,37 @@ test('login rate limits share a source address across usernames and reset after 
   await sessionFields(await login('member', password));
 });
 
+test('short ADMIN passwords require explicit lab provisioning and only work over direct loopback', async t => {
+  const path = join(directory, `${randomUUID()}.json`);
+  const shortPassword = randomBytes(2).toString('hex');
+  const optIn = { allowShortLabPassword: true, env: { APP_MODE: 'simulation' } };
+  await assert.rejects(provisionAccount(path, 'local-admin', 'ADMIN', shortPassword), /at least 12/);
+  await assert.rejects(provisionAccount(path, 'local-admin', 'USER', shortPassword, optIn), /require an ADMIN/);
+  await assert.rejects(provisionAccount(path, 'local-admin', 'ADMIN', shortPassword, {
+    ...optIn, env: { APP_MODE: 'mainnet' },
+  }), /Mainnet is rejected/);
+  await assert.rejects(provisionAccount(path, 'local-admin', 'ADMIN', shortPassword, {
+    ...optIn, env: { APP_MODE: 'regtest', AUTH_ORIGIN: 'https://public.example' },
+  }), /requires? a direct loopback/);
+  assert.deepEqual(await readAccounts(path), []);
+
+  await provisionAccount(path, 'local-admin', 'ADMIN', shortPassword, optIn);
+  const [account] = await readAccounts(path);
+  assert.equal(account?.localLabOnly, true);
+  assert.match(account!.passwordHash, /^scrypt-v1\$/);
+
+  const { login, request } = await runtime(t, { storePath: path });
+  const forwarded = { 'x-forwarded-host': 'public.example' };
+  await assertLoginFailure(await login('local-admin', shortPassword, forwarded));
+  const { cookie, session } = await sessionFields(await login('local-admin', shortPassword));
+  assert.equal(session.user.role, 'ADMIN');
+  assert.equal((await request('/v1/auth/session', { headers: { cookie, ...forwarded } })).status, 401);
+  assert.equal((await request('/v1/auth/session', { headers: { cookie } })).status, 200);
+  const publicOrigin = 'https://public.example';
+  const publicRuntime = await runtime(t, { storePath: path, origin: publicOrigin });
+  await assertLoginFailure(await publicRuntime.login('local-admin', shortPassword, { origin: publicOrigin }));
+});
+
 test('missing or malformed auth data fails closed and revokes access from existing sessions', async t => {
   const path = join(directory, `${randomUUID()}.json`);
   const { login, request } = await runtime(t, { storePath: path });

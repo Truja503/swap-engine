@@ -1,4 +1,55 @@
-# Ark regtest: evidence for #50–#53
+# Ark regtest: evidence for #48–#54
+
+## Review fixes: local validation, 2026-11-18
+
+Run on `ark-regtest-46-54` with Podman 4.3.1 / podman-compose 1.6.0,
+Node 22.23.2, pinned Rust 1.97.1, Bitcoin Core 31.0 and arkd v0.9.25.
+Docker Engine on GitHub-hosted Ubuntu was not run.
+
+| Command | Observed result |
+| --- | --- |
+| `cargo fmt --check` (from `ark/`) | Exit 0. |
+| `cargo clippy -- -D warnings` (from `ark/`) | Exit 0; the locked all-targets/all-features check also exited 0. |
+| `npm run ark:test -- --unit-only` | Exit 0; 9 Rust tests passed, 1 opt-in SDK test ignored. The synthetic Bash regressions passed: funding on an older page, RPC error, conflicted funding, lost acknowledgement/recovery without re-sending, and strict `gettxout`. |
+| `npm run ark:start` | Exit 0 after the one-time bridge migration; reused the original volumes and Core tip at height 110. The miner had exactly 21 confirmed legacy bootstrap TXIDs. |
+| `npm run ark:status` | Exit 0; Core/Esplora/NBXplorer agreed, signer healthy, operator wallet initialized/unlocked/synced, PostgreSQL and Redis ready. Core's host RPC returned the expected HTTP 401 to an unauthenticated loopback POST. |
+| `npm run ark:test -- --e2e` | Exit 0; 9 live stages passed, 2 skipped (unilateral exit and live mid-mutation timeout). |
+| `npm run ark:test -- --e2e` (same fixture) | Expected exit 1: the existing one-shot claim refused the run before funding. |
+| `cargo test --locked --test adapter_arkd_read -- --ignored --nocapture` (from `ark/`) | Exit 0, 1 live test passed: Alice total 125,000 sats, 3 VTXO rows and renewal leaf present. |
+| `npm run ark:stop` | Exit 0; no owned lab container remained running. The final live check before stopping found Core at height 118 and the same 21 confirmed bootstrap deposits. |
+| `npm run secrets:check` | Exit 0; no findings. |
+
+The existing stack migration recreated only the four owned services with
+published ports. Podman reported `internal=true` for `swap_engine_ark_net`
+and `internal=false` for `swap_engine_ark_host_net`. See the
+[migration instructions](operator-regtest.md).
+
+The completed run used new fixture wallets. Earlier one-shot attempt
+directories were archived, not cleared or re-funded. The live fixture
+recorded the following public regtest evidence:
+
+| Check | Observed result |
+| --- | --- |
+| Boarding with arkd stopped | `ArkOperatorUnavailable`; one funding transaction to the fixture address. Core still returned the confirmed 200,000-sat UTXO `51be88f811014cdfedbdad25683ddfbd7352e24443dde68843cf15f8d7479254:0` (height 115). After restarting arkd, the original outpoint was consumed by `6d7be29923985b8168fb2cdfa4028bb9aa4eec3716a16f2033c95ff1131f969a` (height 116); Alice received 200,000 sats. |
+| Ark transfer with acknowledgement discarded | `pending` recovered `e07649d66d65d1736877d39b48edf046cbbc759f91572b1cc0ebe7eac1387273`. After finalization, it was no longer pending; one Alice input was spent, one Bob output (`:0`) was credited, and balances changed by −75,000 / +75,000 sats. Alice's change (`:1`) held 125,000 sats. The spent-input check issued no spend request. |
+| Cooperative offboard | Core `gettxout` confirmed `706bc342f1ef97c3c62259b72e7e3a5c33c95d898042d2948fa63833af402220:2` (height 117). `scantxoutset` measured 0 → 30,000 sats and reported only that outpoint. Bob's Ark balance went from 75,000 to 45,000 sats. An independent check accepted that output and rejected the empty response for the already-spent boarding outpoint. |
+| Stale VTXO renewal | Alice's original change was rejected for transfer after expiry, then renewed through `b560b4784e9491b5bd3273cfdbfe553edcab5c860a415dce6b7f8133622d5d52` (height 118) with no change in her 125,000-sat total. |
+| Operator restart after funding | The cooperative call failed closed while arkd was down. After restart, full balance and VTXO snapshots matched: Alice had 125,000 recoverable sats and 3 VTXO rows, Bob 45,000 recoverable sats and 2 rows. Both live leaves had already expired before the comparison; no new blocks were mined for this check. |
+| Core RPC and Esplora outages | Both isolated outages failed the expected probes; the regtest chain and indexers were healthy again after restart. |
+
+## #48–#49: prior full-stack restart
+
+The private `data/ark/evidence/issues-48-49.md` recorded a full-stack
+stop/start with a read-only probe in between. `ark-lab balance` exited 1
+while stopped, produced zero bytes on stdout, and reported only
+`ArkOperatorUnavailable: could not query the local Arkade operator`.
+After restarting, seven snapshot diffs exited 0: the tip remained at height
+102; signer public key, operator balance, A/B addresses, both zero balances
+and empty VTXO lists, the two SQLite contract rows per wallet (`integrity_check=ok`),
+the 11 container IDs (9 active, 2 stopped), and all 8 volume names matched.
+The full verification exited 0.
+
+## Earlier integrated live run (#50–#53)
 
 Run on 2026-11-18 in `ark-regtest-46-54`, with Podman 4.3.1 /
 podman-compose 1.6.0, Node 22.23.2, Rust 1.97.1, Bitcoin Core 31.0,
@@ -17,7 +68,7 @@ The GitHub-hosted Ubuntu workflow was not dispatched.
 | `cargo clippy --manifest-path ark/Cargo.toml --locked --all-targets --all-features -- -D warnings` | Exit 0. |
 | `npm run secrets:check` | Exit 0; no findings. |
 
-## Integrated live run (`data/ark/e2e/evidence/`)
+### Transactions and stages
 
 | Transaction | TXID | Core height / block hash | Chain fee |
 | --- | --- | --- | ---: |

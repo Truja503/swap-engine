@@ -149,19 +149,23 @@
         <p class="status" id="balance-status" role="status">Balance snapshot unavailable.</p>
         <time id="balance-time" hidden></time>
       </div>
-      <section class="balance-group" aria-labelledby="onchain-balances-title">
+      <section class="balance-group" id="onchain-balances" aria-labelledby="onchain-balances-title">
         <h3 id="onchain-balances-title">On-chain wallets</h3>
+        <p class="balance-scale">Fill is relative to the largest known confirmed on-chain balance in this snapshot.</p>
         <div class="balance-grid">
-          <div class="balance-node">
+          <div class="balance-node balance-wallet">
             <h4>Bitcoin Core</h4>
+            <div class="wallet-pile" id="core-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
             <dl><div><dt>Confirmed</dt><dd id="core-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="core-unconfirmed">Unavailable</dd></div></dl>
           </div>
-          <div class="balance-node">
+          <div class="balance-node balance-wallet">
             <h4>LND Provider</h4>
+            <div class="wallet-pile" id="provider-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
             <dl><div><dt>Confirmed</dt><dd id="provider-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="provider-unconfirmed">Unavailable</dd></div></dl>
           </div>
-          <div class="balance-node">
+          <div class="balance-node balance-wallet">
             <h4>LND Alice</h4>
+            <div class="wallet-pile" id="alice-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
             <dl><div><dt>Confirmed</dt><dd id="alice-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="alice-unconfirmed">Unavailable</dd></div></dl>
           </div>
         </div>

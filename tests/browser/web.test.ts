@@ -204,7 +204,7 @@ test('regtest page renders a real preflight 503 report with offline test ports',
   await page.screenshot({ path: 'dist/web-verification/admin.png', fullPage: true });
 });
 
-test('administrator balances show wallet and channel snapshots, distinguish zero from unknown, and clear on denial', async context => {
+test('administrator wallets scale confirmed balances and distinguish zero, unknown, loading and stale snapshots', async context => {
   const f = await setup();
   context.after(f.cleanup);
   const server = createApi(f.manager, async () => { throw new Error('Offline test port'); }, undefined, 'regtest');
@@ -214,17 +214,31 @@ test('administrator balances show wallet and channel snapshots, distinguish zero
   const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
   context.after(() => browser.close());
   const page = await browser.newPage({ reducedMotion: 'reduce' });
+  await page.clock.install();
   await page.route('**/v1/auth/session', route => route.fulfill({ json: session('ADMIN') }));
   let denied = false;
-  const capturedAt = '2026-11-18T06:20:00.000Z';
-  await page.route('**/v1/operations/balances', route => denied
-    ? route.fulfill({ status: 403, json: { error: 'FORBIDDEN' } })
-    : route.fulfill({ json: {
+  let zeroSnapshot = false;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  const capturedAt = new Date(Date.now() - 20_000).toISOString();
+  await page.route('**/v1/operations/balances', async route => {
+    if (denied) return route.fulfill({ status: 403, json: { error: 'FORBIDDEN' } });
+    if (zeroSnapshot) {
+      await refreshGate;
+      return route.fulfill({ json: {
+        network: 'regtest', capturedAt: new Date().toISOString(),
+        core: { confirmedSats: 0, unconfirmedSats: 100_000 },
+        provider: { confirmedSats: 0, unconfirmedSats: 0, localSats: 900_000, remoteSats: 1 },
+        alice: null,
+      } });
+    }
+    return route.fulfill({ json: {
       network: 'regtest', capturedAt,
       core: { confirmedSats: 100_000, unconfirmedSats: 0 },
       provider: { confirmedSats: 52_000, unconfirmedSats: null, localSats: 0, remoteSats: 21_000 },
       alice: { confirmedSats: 0, unconfirmedSats: 925, localSats: null, remoteSats: 0 },
-    } }));
+    } });
+  });
   await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#operations`);
   await page.getByText('Regtest snapshot', { exact: true }).waitFor();
   for (const [id, amount] of Object.entries({
@@ -236,14 +250,41 @@ test('administrator balances show wallet and channel snapshots, distinguish zero
   })) {
     assert.equal(await page.locator('#' + id).textContent(), amount);
   }
+  const fill = (id: string) => page.locator('#' + id + '-pile').evaluate(pile => (pile as HTMLElement).style.getPropertyValue('--wallet-fill'));
+  assert.equal(await fill('core'), '100%');
+  assert.equal(await fill('provider'), '52%');
+  assert.equal(await fill('alice'), '0%');
+  assert.equal(await page.locator('#alice-pile').getAttribute('data-state'), 'known');
+  await page.getByText(/relative to the largest known confirmed on-chain balance/).waitFor();
   assert.equal(await page.locator('#balance-time').getAttribute('datetime'), capturedAt);
   await audit(page);
   await page.screenshot({ path: evidence + '/operations-balances.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: evidence + '/operations-balances-mobile.png', fullPage: true });
+  await page.clock.fastForward(41_000);
+  await page.getByText('Regtest snapshot · at least 1 minute old', { exact: true }).waitFor();
+  assert.equal(await page.locator('#onchain-balances').getAttribute('data-stale'), '');
+  assert.equal(await page.locator('#core-confirmed').textContent(), '100,000 sats');
+  const refresh = page.getByRole('button', { name: 'Refresh balances', exact: true });
+  zeroSnapshot = true;
+  await refresh.click();
+  await page.getByText('Loading balances…', { exact: true }).waitFor();
+  assert.equal(await page.locator('#core-pile').getAttribute('data-state'), 'loading');
+  assert.equal(await fill('provider'), '');
+  releaseRefresh();
+  await page.getByText('Regtest snapshot', { exact: true }).waitFor();
+  assert.equal(await page.locator('#core-pile').getAttribute('data-state'), 'known');
+  assert.equal(await page.locator('#alice-pile').getAttribute('data-state'), 'unavailable');
+  assert.equal(await page.locator('#core-confirmed').textContent(), '0 sats');
+  assert.equal(await page.locator('#core-unconfirmed').textContent(), '100,000 sats');
+  assert.equal(await page.locator('#provider-local').textContent(), '900,000 sats');
+  assert.equal(await fill('core'), '');
+  assert.equal(await fill('provider'), '');
+  assert.equal(await fill('alice'), '');
+  assert.equal(await page.locator('#onchain-balances').getAttribute('data-stale'), null);
   denied = true;
-  await page.getByRole('button', { name: 'Refresh balances', exact: true }).click();
+  await refresh.click();
   await page.getByText('Balance snapshot unavailable.', { exact: true }).waitFor();
   assert.equal(await page.locator('#provider-remote').textContent(), 'Unavailable');
   assert.equal(await page.locator('#balance-time').isVisible(), false);

@@ -89,9 +89,5 @@ wait_for "funded operator wallet" funded
 printf '%s\n' '{"fees":{"offchainInputFee":"0.0","onchainInputFee":"0.0","offchainOutputFee":"0.0","onchainOutputFee":"0.0"}}' |
   admin_post intentFees || fail "cannot set regtest intent fees"
 wait_for "indexers after bootstrap" validate_indexers
-signer_ready() {
-  docker container inspect --format '{{json .State}}' ark_lab_arkd_signer |
-    jq -e '(.Health.Status // .Healthcheck.Status) == "healthy"'
-}
 wait_for "signer health check" signer_ready
 report_status

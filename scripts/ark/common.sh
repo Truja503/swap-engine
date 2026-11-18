@@ -149,12 +149,18 @@ valid_operator() {
   http "$api" | jq -e '.network == "regtest" and (.signerPubkey | length > 0)' >/dev/null
 }
 
+signer_ready() {
+  # Query the real endpoint from the operator's network namespace. Some
+  # engine/image combinations do not import the Dockerfile HEALTHCHECK.
+  compose exec -T arkd wget -q --spider -T 5 http://arkd-signer:6061/healthz
+}
+
 wallet_total() {
   admin_get wallet/balance | jq -er '[.mainAccount.available, .mainAccount.locked] | map(tonumber) | add'
 }
 
 report_status() {
-  local tip height op wallet balance db signer
+  local tip height op wallet balance db
   require_running
   validate_chain
   validate_indexers || fail "NBXplorer or Esplora not synced"
@@ -162,9 +168,7 @@ report_status() {
     "SELECT count(*) FROM pg_database WHERE datname IN ('nbxplorer','projection','event')")
   [[ "$db" == 3 ]] || fail "missing lab databases"
   [[ $(compose exec -T redis redis-cli --raw ping) == PONG ]] || fail "Redis unavailable"
-  signer=$(docker container inspect --format '{{json .State}}' ark_lab_arkd_signer |
-    jq -er '.Health.Status // .Healthcheck.Status // empty')
-  [[ "$signer" == healthy ]] || fail "signer is not healthy"
+  signer_ready || fail "signer is not healthy"
   valid_wallet || fail "operator wallet not ready"
   valid_operator || fail "operator unavailable or wrong network"
   height=$(core getblockcount)

@@ -44,6 +44,11 @@ enum Command {
         wallet: WalletId,
         input: bitcoin::OutPoint,
     },
+    OffboardCoop {
+        input: bitcoin::OutPoint,
+        address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        sats: u64,
+    },
 }
 
 #[tokio::main]
@@ -66,6 +71,11 @@ async fn main() -> ExitCode {
             (Action::VerifySpent(input, sats), Some(WalletId::Alice))
         }
         Command::SettleVtxo { wallet, input } => (Action::SettleVtxo(input), Some(wallet)),
+        Command::OffboardCoop {
+            input,
+            address,
+            sats,
+        } => (Action::Offboard(input, address, sats), Some(WalletId::Bob)),
     };
     let both = [WalletId::Alice, WalletId::Bob];
     let repo = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));

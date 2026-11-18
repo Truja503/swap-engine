@@ -28,6 +28,23 @@ impl RegtestBlockchain {
             .and_then(reqwest::Response::error_for_status)
             .map_err(|_| unavailable())
     }
+
+    pub async fn require_regtest(&self) -> Result<(), Error> {
+        let genesis = self
+            .get("/block-height/0")
+            .await?
+            .text()
+            .await
+            .map_err(|_| unavailable())?;
+        if genesis.trim() != GENESIS {
+            return Err(network_mismatch());
+        }
+        Ok(())
+    }
+}
+
+fn network_mismatch() -> Error {
+    Error::consumer(std::io::Error::other("RegtestNetworkMismatch"))
 }
 
 fn unavailable() -> Error {
@@ -36,7 +53,7 @@ fn unavailable() -> Error {
 
 fn unsupported() -> Error {
     Error::consumer(std::io::Error::other(
-        "Operation outside scope of Ark lab #49",
+        "On-chain broadcasting and unilateral exit are not implemented in this lab",
     ))
 }
 
@@ -56,25 +73,14 @@ struct Status {
 }
 
 impl Blockchain for RegtestBlockchain {
-    // The SDK uses this during explicit contract restoration. The other
-    // blockchain methods belong to later funding and settlement issues.
     async fn find_outpoints(&self, address: &Address) -> Result<Vec<ExplorerUtxo>, Error> {
         if !address
             .as_unchecked()
             .is_valid_for_network(Network::Regtest)
-            || self
-                .get("/block-height/0")
-                .await?
-                .text()
-                .await
-                .map_err(|_| unavailable())?
-                .trim()
-                != GENESIS
         {
-            return Err(Error::consumer(std::io::Error::other(
-                "RegtestNetworkMismatch",
-            )));
+            return Err(network_mismatch());
         }
+        self.require_regtest().await?;
         let tip: u64 = self
             .get("/blocks/tip/height")
             .await?

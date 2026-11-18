@@ -1,4 +1,5 @@
 mod blockchain;
+mod offboard;
 mod transfer;
 mod wallet_store;
 
@@ -7,7 +8,7 @@ use ark_client::{
     BoltzReferralId, Client, InMemorySwapStorage, OfflineClient, OfflineClientConfig,
 };
 use ark_core::server::Info;
-use bitcoin::{Network, OutPoint, Txid};
+use bitcoin::{address::NetworkUnchecked, Address, Network, OutPoint, Txid};
 use blockchain::{RegtestBlockchain, ESPLORA};
 use serde_json::{json, Value};
 use std::{future::Future, net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
@@ -39,6 +40,8 @@ pub enum LabError {
     InputNotSpendable,
     #[error("ArkInvalidAmount: amount or change outside supported range or insufficient input")]
     InvalidAmount,
+    #[error("ArkIndexerUnavailable: local regtest Esplora did not validate")]
+    IndexerUnavailable,
 }
 
 type Result<T> = std::result::Result<T, LabError>;
@@ -71,6 +74,7 @@ pub enum Action {
     TransferFinalize(Txid),
     VerifySpent(OutPoint, u64),
     SettleVtxo(OutPoint),
+    Offboard(OutPoint, Address<NetworkUnchecked>, u64),
 }
 
 pub(crate) async fn bounded_submission<T, E>(
@@ -284,6 +288,9 @@ pub async fn run(repo: &Path, action: Action, wallets: &[WalletId]) -> Result<Va
             }
             Action::Pending => transfer::pending(&client).await?,
             Action::TransferFinalize(txid) => transfer::finalize(&client, *txid).await?,
+            Action::Offboard(input, address, sats) => {
+                offboard::cooperative(&client, *input, address.clone(), *sats).await?
+            }
             Action::Restore => {
                 let report = client
                     .restore_contracts(ark_client::DEFAULT_GAP_LIMIT)

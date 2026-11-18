@@ -1,10 +1,23 @@
-use crate::{LabError, Result, SdkClient};
+use crate::{bounded_submission, LabError, Result, SdkClient};
 use ark_core::{
     contract::SpendPathKind,
     send::{SendReceiver, VtxoInput},
 };
 use bitcoin::{Amount, OutPoint, Txid};
 use serde_json::{json, Value};
+use std::time::Duration;
+
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(30);
+
+fn checked_ark_address(
+    address: &ark_core::ArkAddress,
+    expected_signer: bitcoin::XOnlyPublicKey,
+) -> Result<()> {
+    if address.server() != expected_signer || !address.encode().starts_with("tark1") {
+        return Err(LabError::NetworkMismatch);
+    }
+    Ok(())
+}
 
 pub(crate) async fn submit(
     alice: &SdkClient,
@@ -46,12 +59,21 @@ pub(crate) async fn submit(
     let selection = entry
         .spend_selection(SpendPathKind::Forfeit)
         .map_err(|_| LabError::InputNotSpendable)?;
+    let bob_info = bob
+        .server_info()
+        .await
+        .map_err(|_| LabError::OperatorUnavailable)?;
+    if bob_info.signer_pk != info.signer_pk {
+        return Err(LabError::NetworkMismatch);
+    }
     let (address, _) = bob
         .get_offchain_address()
         .await
         .map_err(|_| LabError::Sdk("Bob Ark address"))?;
-    let txid = alice
-        .submit_offchain_tx(
+    checked_ark_address(&address, info.signer_pk.x_only_public_key().0)?;
+    let txid = bounded_submission(
+        TRANSFER_DEADLINE,
+        alice.submit_offchain_tx(
             vec![VtxoInput::new_with_spend_selection(
                 selection,
                 entry.tapscripts(),
@@ -62,9 +84,9 @@ pub(crate) async fn submit(
             )],
             address,
             amount,
-        )
-        .await
-        .map_err(|_| LabError::SubmissionUncertain)?;
+        ),
+    )
+    .await?;
     Ok(
         json!({"ark_txid":txid,"input":input.to_string(),"amount_sats":sats,
               "recipient":address.to_string(),"state":"submitted_not_finalized"}),
@@ -87,10 +109,7 @@ pub(crate) async fn finalize(client: &SdkClient, txid: Txid) -> Result<Value> {
         .map_err(|_| LabError::OperatorUnavailable)?;
     let is_pending = transactions.iter().any(|tx| tx.ark_txid == txid);
     if is_pending {
-        client
-            .finalize_pending_offchain_tx(txid)
-            .await
-            .map_err(|_| LabError::SubmissionUncertain)?;
+        bounded_submission(TRANSFER_DEADLINE, client.finalize_pending_offchain_tx(txid)).await?;
     }
     Ok(json!({"ark_txid":txid,"finalize_attempted":is_pending}))
 }
@@ -132,5 +151,34 @@ pub(crate) async fn verify_spent(
             Ok(json!({"input":input.to_string(),"rejected":true}))
         }
         _ => Err(LabError::Sdk("expected SDK selection rejection")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_core::ArkAddress;
+    use bitcoin::{key::TweakedPublicKey, Network, XOnlyPublicKey};
+
+    #[test]
+    fn ark_address_server_key_detects_operator_mismatch() {
+        let k1: XOnlyPublicKey = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+            .parse()
+            .unwrap();
+        let k2: XOnlyPublicKey = "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+            .parse()
+            .unwrap();
+        let tap = TweakedPublicKey::dangerous_assume_tweaked(k1);
+        let regtest_addr = ArkAddress::new(Network::Regtest, k1, tap);
+        assert!(checked_ark_address(&regtest_addr, k1).is_ok());
+        assert!(matches!(
+            checked_ark_address(&regtest_addr, k2),
+            Err(LabError::NetworkMismatch)
+        ));
+        let mainnet_addr = ArkAddress::new(Network::Bitcoin, k1, tap);
+        assert!(matches!(
+            checked_ark_address(&mainnet_addr, k1),
+            Err(LabError::NetworkMismatch)
+        ));
     }
 }

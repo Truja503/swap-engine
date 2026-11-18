@@ -26,6 +26,9 @@ export type Swap = {
 export type ChainObservation = { fromHeight: number; height: number; blockHash: string;
   spend?: { txid: string; blockHash: string; height: number } };
 export type Database = { schema: 1; quotes: Record<string, Quote>; swaps: Record<string, Swap>;
+  ownedReverse?: { owners: Record<string, { ownerId: string; paymentHash: string; claimDestination: string; contractDigest: string }>;
+    requests: Record<string, { ownerId: string; swapId: string; kind: 'EXECUTE' | 'RECONCILE'; fingerprint: string;
+      attemptId: string; expectedRevision: number; createdAt: number; status: 'INTENT' | 'SUCCEEDED' | 'UNKNOWN'; result?: unknown }> };
   jitExecutions?: Record<string, { termsDigest: string; swapId: string; priorRevision: number; startedAt: number;
     authorization: import('./JustInTimeReverse.js').JitAuthorization;
     priorPlan: import('./ReverseTestPlan.js').ReverseTestPlan; status: 'INTENT' | 'QUOTED' | 'EXECUTING' | 'COMPLETED' | 'UNKNOWN';

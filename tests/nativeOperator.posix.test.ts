@@ -12,6 +12,10 @@ import { sha256 } from '../src/operator/OperatorFiles.js';
 import { verifyCustodyBackup } from '../src/operator/CustodyBackup.js';
 import { coreActionMethods, type ActionInspection } from '../src/operator/NativeActionCredentials.js';
 import { runOperatorCLI, type OperatorIO } from '../scripts/run-controlled-reverse.js';
+import { createApi } from '../src/api/server.js';
+import { SwapManager } from '../src/core/SwapManager.js';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const linux = process.platform === 'linux'; const password = 'synthetic-operator-backup-passphrase';
 async function lifecycleFixture() {
@@ -184,5 +188,42 @@ test('operator shutdown retains the single-writer lock until a timed-out executo
     const reopened = await Store.open(join(f.directory, 'store'));
     try { assert.equal(reopened.read().swaps[f.x.f.swap.id]!.clientPayment!.status, 'UNKNOWN'); }
     finally { await reopened.close(); }
+  } finally { await f.cleanup(); }
+});
+
+test('native owner handoff uses existing sessions, exact JIT approval and read-only restart without duplicate execution', { skip: !linux }, async () => {
+  const f = await lifecycleFixture(); try {
+    const authority = await f.authorize(); const origin = 'http://localhost:3000';
+    const ui = Buffer.from(JSON.stringify({ ownerId: 'alice', origin, port: 12345 }));
+    await writeFile(join(f.directory, 'ui-access.json'), ui, { mode: 0o600, flag: 'wx' });
+    const args = ['--serve-jit', ...authority.args.slice(1), '--ui-config-sha256', sha256(ui)];
+    const passwords = f.passwordReads(); await assert.rejects(runOperatorCLI(args, f.io));
+    assert.equal(f.passwordReads(), passwords); assert.equal(f.executions(), 0);
+    const session = { account: { id: 'alice', role: 'USER' } };
+    f.io.sessions = { get: async req => req.headers.cookie === 'swap_session=synthetic' ? session : undefined,
+      verifyCsrf: req => req.headers.origin === origin && req.headers['x-csrf-token'] === 'synthetic-csrf' };
+    let statusOnly = false;
+    f.io.serve = async (store, owned) => {
+      const server = createApi(new SwapManager(store), async () => { throw Error('No global balances'); }, undefined, undefined, undefined, owned);
+      server.listen(0, '127.0.0.1'); await once(server, 'listening');
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const headers = { cookie: 'swap_session=synthetic', origin, 'x-csrf-token': 'synthetic-csrf', 'content-type': 'application/json', 'idempotency-key': 'native-ui-click' };
+      try {
+        const status = await (await fetch(url + `/v1/swaps/${f.x.f.swap.id}`, { headers })).json();
+        assert.equal(status.allowedActions.includes('EXECUTE'), !statusOnly);
+        if (!statusOnly) {
+          const path = url + '/v1/swaps/reverse'; const data = JSON.stringify({ preparedSwapId: status.id, expectedRevision: status.revision });
+          const first = await fetch(path, { method: 'POST', headers, body: data }); assert.equal(first.status, 200);
+          const receipt = await first.json(); assert.equal(receipt.result.state, 'COMPLETED');
+          assert.deepEqual(await (await fetch(path, { method: 'POST', headers, body: data })).json(), receipt);
+        } else assert.equal(status.execution.status, 'COMPLETED');
+      } finally { await new Promise<void>(r => server.close(() => r())); await owned.drain(); }
+      return { status: 'TEST_GATEWAY_STOPPED' };
+    };
+    await runOperatorCLI(args, f.io); assert.equal(f.executions(), 1); await f.unlocked();
+    const reads = f.passwordReads(); const inspections = f.actionInspections(); statusOnly = true;
+    await runOperatorCLI(['--serve-status-only', ...f.args('review').slice(1), '--ui-config-sha256', sha256(ui)], f.io);
+    assert.equal(f.passwordReads(), reads); assert.equal(f.actionInspections(), inspections); assert.equal(f.executions(), 1); await f.unlocked();
+    await assert.rejects(runOperatorCLI(args, f.io)); assert.equal(f.executions(), 1);
   } finally { await f.cleanup(); }
 });

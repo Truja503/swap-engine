@@ -15,6 +15,8 @@ import { LndRecoveryClient, LndPayerRecovery, assertRecoveryNode } from '../src/
 import { HttpsLndInvoiceTransport } from '../src/lightning/LndInvoiceTransport.js';
 import { createReverseRecovery } from '../src/api/reverseRecovery.js';
 import { executeControlledApi } from '../src/api/controlledExecution.js';
+import { createOwnedReverseApi, sessionOwnerAuthenticator, type OwnerSessions } from '../src/api/ownedReverse.js';
+import { serveOwnedReverse } from '../src/api/serveOwnedReverse.js';
 import { controlledRunDigest } from '../src/core/ControlledReverseBackend.js';
 import { verifyReverseTestPlan } from '../src/core/ReverseTestPlan.js';
 import { operatorDirectory, protectedBytes, checkedJSON, operatorArtifact, sha256, operatorStopped } from '../src/operator/OperatorFiles.js';
@@ -26,11 +28,23 @@ const readPathsSchema = z.object({ bitcoinCookiePath: absolute, providerCertPath
   payerCertPath: absolute, payerReadMacaroonPath: absolute, providerInvoiceMacaroonPath: absolute.optional() }).strict();
 export const operatorAuthorizationSchema = z.object({ specSha256: hash, actionConfigSha256: hash, backupConfigSha256: hash,
   authorization: jitAuthorizationSchema }).strict();
+export const uiAccessSchema = z.object({ ownerId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/),
+  origin: z.string(), port: z.number().int().min(1).max(65535) }).strict();
 type Base = { directory: string; checksum: string };
 export type OperatorCommand = { mode: 'help' } | Base & ({ mode: 'review' } | { mode: 'check'; actionHash: string; backupHash: string }
   | { mode: 'execute'; actionHash: string; backupHash: string; approvalHash: string } | { mode: 'reconcile'; jitId: string; revision: number });
-const usage = 'Local Linux regtest only; no default action. --review-jit-only --run-dir ABS --spec-sha256 SHA; --check-runtime-only adds --action-config-sha256 SHA --backup-config-sha256 SHA; --execute-jit adds those plus --authorization-sha256 SHA; --reconcile-only adds --jit-id UUID --expected-revision N. Execution can pay/sign/broadcast/mine; review/check/reconcile cannot. Passphrase via stdin only; reconcile needs none.';
-export function parseOperatorCommand(args: string[]): OperatorCommand {
+type ServeCommand = Base & { mode: 'serve'; actionHash: string; backupHash: string; approvalHash: string; uiHash: string };
+type StatusCommand = Base & { mode: 'serve-status'; uiHash: string };
+const usage = 'Local Linux regtest only; no default action. --review-jit-only --run-dir ABS --spec-sha256 SHA; --check-runtime-only adds --action-config-sha256 SHA --backup-config-sha256 SHA; --execute-jit adds those plus --authorization-sha256 SHA; --reconcile-only adds --jit-id UUID --expected-revision N. --serve-jit uses execution arguments plus --ui-config-sha256 SHA; --serve-status-only uses review arguments plus --ui-config-sha256 SHA. Serve modes require the existing application Sessions instance injected in-process; no separate login or browser operator token. Execution can pay/sign/broadcast/mine; review/check/reconcile/status cannot. Passphrase via stdin only; reconcile/status need none.';
+export function parseOperatorCommand(args: string[]): OperatorCommand | ServeCommand | StatusCommand {
+  if (args[0] === '--serve-status-only' && args.length === 7 && args[5] === '--ui-config-sha256' && hash.safeParse(args[6]).success) {
+    const review = parseOperatorCommand(['--review-jit-only', ...args.slice(1, 5)]);
+    if (review.mode !== 'review') throw operatorStopped(); return { ...review, mode: 'serve-status', uiHash: args[6]! };
+  }
+  if (args[0] === '--serve-jit' && args.length === 13 && args[11] === '--ui-config-sha256' && hash.safeParse(args[12]).success) {
+    const execute = parseOperatorCommand(['--execute-jit', ...args.slice(1, 11)]);
+    if (execute.mode !== 'execute') throw operatorStopped(); return { ...execute, mode: 'serve', uiHash: args[12]! };
+  }
   if (args.length === 1 && args[0] === '--help') return { mode: 'help' };
   const modes: Record<string, 'review' | 'check' | 'execute' | 'reconcile'> = {
     '--review-jit-only': 'review', '--check-runtime-only': 'check', '--execute-jit': 'execute', '--reconcile-only': 'reconcile' };
@@ -64,24 +78,28 @@ function readClients(spec: PreparationSpec, paths: z.infer<typeof readPathsSchem
     recoveryPayer: new LndRecoveryClient(payer.origin, paths.payerCertPath, paths.payerReadMacaroonPath) };
 }
 export type OperatorIO = { password(): Buffer; clients: typeof readClients; inspectActions: typeof inspectNativeActions;
-  probeCore: typeof probeCoreAction; backup: typeof verifyCustodyBackup; actions: typeof nativeActionDependencies; executor: typeof createJitRuntimeExecutor };
+  probeCore: typeof probeCoreAction; backup: typeof verifyCustodyBackup; actions: typeof nativeActionDependencies; executor: typeof createJitRuntimeExecutor;
+  serve: typeof serveOwnedReverse; sessions?: OwnerSessions<{ account: { id: string; role: string } }> };
 const nativeIO: OperatorIO = { password: () => readFileSync(0), clients: readClients, inspectActions: inspectNativeActions,
-  probeCore: probeCoreAction, backup: verifyCustodyBackup, actions: nativeActionDependencies, executor: createJitRuntimeExecutor };
+  probeCore: probeCoreAction, backup: verifyCustodyBackup, actions: nativeActionDependencies, executor: createJitRuntimeExecutor, serve: serveOwnedReverse };
 
 /** Trusted test seams only. Native entrypoint never reads assembly code from args/env/config. */
 export async function runOperatorCLI(args: string[], overrides: Partial<OperatorIO> = {}): Promise<unknown> {
   const command = parseOperatorCommand(args); if (command.mode === 'help') return { help: usage };
   if (process.platform !== 'linux' || !process.getuid) throw operatorStopped();
-  const io = { ...nativeIO, ...overrides }; const directory = resolve(command.directory); await operatorDirectory(directory);
+  const io = { ...nativeIO, ...overrides };
+  if ((command.mode === 'serve' || command.mode === 'serve-status') && !io.sessions) throw operatorStopped();
+  const directory = resolve(command.directory); await operatorDirectory(directory);
   const spec = preparationSpecSchema.parse(await checkedJSON(join(directory, 'spec.json'), command.checksum));
   const paths = readPathsSchema.parse(JSON.parse((await protectedBytes(join(directory, 'credential-paths.json'))).toString('utf8')));
-  const actions = command.mode === 'check' || command.mode === 'execute'
+  const actions = command.mode === 'check' || command.mode === 'execute' || command.mode === 'serve'
     ? actionPathsSchema.parse(await checkedJSON(join(directory, 'action-credential-paths.json'), command.actionHash)) : undefined;
-  const backup = command.mode === 'check' || command.mode === 'execute'
+  const backup = command.mode === 'check' || command.mode === 'execute' || command.mode === 'serve'
     ? backupSchema.parse(await checkedJSON(join(directory, 'custody-backup.json'), command.backupHash)) : undefined;
   if (backup && backup.specSha256 !== command.checksum) throw operatorStopped();
-  const authorization = command.mode === 'execute' ? operatorAuthorizationSchema.parse(await checkedJSON(join(directory, 'jit-authorization.json'), command.approvalHash)) : undefined;
-  if (authorization && (command.mode !== 'execute' || authorization.specSha256 !== command.checksum ||
+  const authorization = command.mode === 'execute' || command.mode === 'serve' ? operatorAuthorizationSchema.parse(await checkedJSON(join(directory, 'jit-authorization.json'), command.approvalHash)) : undefined;
+  const ui = command.mode === 'serve' || command.mode === 'serve-status' ? uiAccessSchema.parse(await checkedJSON(join(directory, 'ui-access.json'), command.uiHash)) : undefined;
+  if (authorization && ((command.mode !== 'execute' && command.mode !== 'serve') || authorization.specSha256 !== command.checksum ||
     authorization.actionConfigSha256 !== command.actionHash || authorization.backupConfigSha256 !== command.backupHash ||
     authorization.authorization.issuedAt > Date.now() || authorization.authorization.startBefore <= Date.now())) throw operatorStopped();
   await operatorDirectory(join(directory, 'store')); await protectedBytes(join(directory, 'store/state.json'));
@@ -90,6 +108,23 @@ export async function runOperatorCLI(args: string[], overrides: Partial<Operator
   const stop = () => { interrupted = true; executor?.stopClient(); };
   try {
     store = await Store.open(join(directory, 'store')); const clients = io.clients(spec, paths);
+    const ownerRecovery = () => createReverseRecovery(store!, {
+      assertRegtest: async () => { await clients.bitcoin.assertRegtest(); await assertRecoveryNode(clients.provider, spec.providerNode); await assertRecoveryNode(clients.recoveryPayer, spec.payerNode); },
+      invoice: hash => clients.provider.lookup(hash), confirmed: id => clients.bitcoin.confirmed(id),
+      tip: async () => z.object({ chain: z.literal('regtest'), initialblockdownload: z.literal(false), blocks: z.number().int().nonnegative() }).parse(await clients.bitcoin.call('getblockchaininfo')).blocks,
+    }, new LndPayerRecovery(clients.recoveryPayer, spec.payerNode, hash => {
+      if (hash !== spec.client.paymentHash) throw operatorStopped(); return { routing: spec.routing, providerNode: spec.providerNode };
+    }));
+    if (command.mode === 'serve-status') {
+      if (!ui) throw operatorStopped();
+      const swaps = Object.values(store.read().swaps); const swap = swaps[0];
+      if (swaps.length !== 1 || !swap || swap.contract.paymentHash !== spec.client.paymentHash ||
+        swap.contract.claimPublicKey !== spec.client.claimPublicKey || swap.contract.refundPublicKey !== spec.refundPublicKey) throw operatorStopped();
+      const owned = createOwnedReverseApi(store, sessionOwnerAuthenticator(io.sessions!),
+        { origin: ui.origin, recovery: ownerRecovery() });
+      await owned.bind(ui.ownerId, swap.id, spec.claimDestination);
+      return await io.serve(store, owned, ui.port, stop);
+    }
     if (command.mode === 'reconcile') {
       const record = store.read().jitExecutions?.[command.jitId];
       if (!record?.plan || !record.approval || record.authorization.termsDigest !== record.termsDigest) throw operatorStopped();
@@ -133,6 +168,16 @@ export async function runOperatorCLI(args: string[], overrides: Partial<Operator
       underlying = concrete.execute(context); return underlying;
     }, stopClient() { interrupted = true; concrete?.stopClient(); } };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
+    if (command.mode === 'serve') {
+      if (!ui) throw operatorStopped();
+      const owned = createOwnedReverseApi(store, sessionOwnerAuthenticator(io.sessions!),
+        { origin: ui.origin, recovery: ownerRecovery() });
+      await owned.bind(ui.ownerId, review.swapId, spec.claimDestination);
+      owned.approve({ ownerId: ui.ownerId, swapId: review.swapId, expectedRevision: review.revision, termsDigest: review.termsDigest,
+        expiresAt: authorization.authorization.startBefore,
+        execute: () => createJustInTimeReverse(currentStore, spec, readers, authorization.authorization, executor).run() });
+      return await io.serve(store, owned, ui.port, stop);
+    }
     return await executeControlledApi(store, review.swapId, review.revision,
       () => createJustInTimeReverse(currentStore, spec, readers, authorization.authorization, executor).run());
   } finally {

@@ -10,6 +10,7 @@ import type { preflight } from '../diagnostics/preflight.js';
 import { describeSwapState } from '../ui/swapStatus.js';
 import { timingSafeEqual } from 'node:crypto';
 import type { ControlledExecution } from './controlledExecution.js';
+import type { OwnedReverseApi } from './ownedReverse.js';
 
 const webAssets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -23,12 +24,15 @@ async function body(req: IncomingMessage): Promise<unknown> {
   for await (const chunk of req) { text += chunk.toString(); if (Buffer.byteLength(text) > 8192) throw new SyntaxError('Body too large'); }
   return JSON.parse(text);
 }
-export function createApi(manager: SwapManager, liquidity: () => Promise<Balances>, diagnostics?: () => ReturnType<typeof preflight>, recovery?: ReverseRecovery, execution?: ControlledExecution) {
+export function createApi(manager: SwapManager, liquidity: () => Promise<Balances>, diagnostics?: () => ReturnType<typeof preflight>, recovery?: ReverseRecovery, execution?: ControlledExecution, owned?: Pick<OwnedReverseApi, 'handle'>) {
   let executionConsumed = false;
   const server = createServer(async (req, res) => {
     const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
     try {
+      if (owned && await owned.handle(req, res)) return;
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (path === '/v1/reverse/availability') return send(503, { network: 'regtest', liveSwapsEnabled: false,
+        controlledReverseConfigured: false, executionAvailable: false, recoveryAvailable: false, error: 'CONTROLLED_REVERSE_NOT_CONFIGURED' });
       const asset = webAssets.get(path);
       if (req.method === 'GET' && asset) {
         const content = await readFile(new URL(`../web/${asset[0]}`, import.meta.url));

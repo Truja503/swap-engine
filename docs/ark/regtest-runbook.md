@@ -103,6 +103,8 @@ ark/target/debug/ark-lab --e2e-fixture pending
 
 See the [local execution record](regtest-evidence.md) for verified identifiers
 and command results.
+The separate [ArkAdapter contract](ark-adapter.md) (#54) adds declared mock
+tests and opt-in SDK reads using the completed #53 fixture.
 
 `data/ark/e2e/evidence/matrix.json` marks each stage `PENDING` before execution,
 `PASSED` after verification, `FAILED` on error and `SKIPPED` for intentionally

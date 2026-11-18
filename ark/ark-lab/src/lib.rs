@@ -1,3 +1,4 @@
+pub mod adapter;
 mod blockchain;
 mod offboard;
 mod transfer;
@@ -100,14 +101,19 @@ fn regtest(info: &Info) -> Result<()> {
 }
 
 async fn operator_info(port: u16) -> Result<Info> {
+    tokio::time::timeout(TIMEOUT, query_operator_info(port))
+        .await
+        .map_err(|_| LabError::OperatorUnavailable)?
+}
+
+async fn query_operator_info(port: u16) -> Result<Info> {
     let url = format!("http://{}:{port}", Ipv4Addr::LOCALHOST);
     let mut probe = ark_grpc::Client::new(url);
-    let info = tokio::time::timeout(TIMEOUT, async {
+    let info = async {
         probe.connect().await?;
         probe.get_info().await
-    })
+    }
     .await
-    .map_err(|_| LabError::OperatorUnavailable)?
     .map_err(|_| LabError::OperatorUnavailable)?;
     regtest(&info)?;
     Ok(info)

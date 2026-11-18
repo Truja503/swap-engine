@@ -124,10 +124,23 @@ async fn connect(store: &WalletStore, create: bool) -> Result<SdkClient> {
 }
 
 async fn addresses(client: &SdkClient) -> Result<Value> {
-    let mut ark = client
+    let info = client
+        .server_info()
+        .await
+        .map_err(|_| LabError::OperatorUnavailable)?;
+    let expected_signer = info.signer_pk.x_only_public_key().0;
+    let raw_ark = client
         .get_offchain_addresses()
         .await
-        .map_err(|_| LabError::Sdk("Ark addresses"))?
+        .map_err(|_| LabError::Sdk("Ark addresses"))?;
+    if raw_ark.is_empty()
+        || !raw_ark
+            .iter()
+            .all(|(address, _)| address.server() == expected_signer)
+    {
+        return Err(LabError::NetworkMismatch);
+    }
+    let mut ark = raw_ark
         .into_iter()
         .map(|(address, _)| address.to_string())
         .collect::<Vec<_>>();
@@ -142,8 +155,7 @@ async fn addresses(client: &SdkClient) -> Result<Value> {
         .get_onchain_address()
         .map_err(|_| LabError::Sdk("on-chain address"))?
         .to_string();
-    if ark.is_empty()
-        || boarding.is_empty()
+    if boarding.is_empty()
         || !bitcoin.starts_with("bcrt1p")
         || !ark.iter().all(|address| address.starts_with("tark1"))
         || !boarding.iter().all(|address| address.starts_with("bcrt1p"))

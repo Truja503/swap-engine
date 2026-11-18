@@ -9,6 +9,7 @@ use zeroize::Zeroizing;
 
 pub struct WalletStore {
     dir: PathBuf,
+    create: bool,
     _lock: File,
 }
 
@@ -50,6 +51,13 @@ fn private_file(path: &Path, create: bool) -> Result<File> {
 
 impl WalletStore {
     pub fn open(repo: &Path, wallet: &str, create: bool) -> Result<Self> {
+        if wallet.is_empty()
+            || wallet == "."
+            || wallet == ".."
+            || wallet.contains(['/', '\\', '\0'])
+        {
+            return Err(LabError::WalletStorage);
+        }
         let data = repo.join("data");
         if create {
             match DirBuilder::new().mode(0o700).create(&data) {
@@ -69,7 +77,11 @@ impl WalletStore {
         }
         let lock = private_file(&dir.join("wallet.lock"), true)?;
         fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| LabError::WalletBusy)?;
-        Ok(Self { dir, _lock: lock })
+        Ok(Self {
+            dir,
+            create,
+            _lock: lock,
+        })
     }
 
     pub fn identity(&self, create: bool) -> Result<Xpriv> {
@@ -107,7 +119,7 @@ impl WalletStore {
 
     pub fn contracts(&self) -> Result<ark_client::SqliteContractStore> {
         let path = self.dir.join("contracts.sqlite");
-        private_file(&path, true)?;
+        private_file(&path, self.create)?;
         ark_client::SqliteContractStore::new(path).map_err(|_| LabError::WalletStorage)
     }
 }
@@ -154,5 +166,18 @@ mod tests {
         assert!(alice.identity(true).is_err());
         symlink("/dev/null", alice.dir.join("contracts.sqlite")).unwrap();
         assert!(alice.contracts().is_err());
+    }
+
+    #[test]
+    fn refuses_traversal_names_and_missing_contracts_on_reopen() {
+        let repo = tempfile::tempdir().unwrap();
+        for bad in ["", ".", "..", "../bob", "alice/sub", "a\\b", "a\0b"] {
+            assert!(WalletStore::open(repo.path(), bad, true).is_err());
+        }
+        let alice = WalletStore::open(repo.path(), "alice", true).unwrap();
+        alice.identity(true).unwrap();
+        drop(alice);
+        let reopened = WalletStore::open(repo.path(), "alice", false).unwrap();
+        assert!(reopened.contracts().is_err());
     }
 }

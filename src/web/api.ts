@@ -33,6 +33,22 @@ const preflight = z.object({
   tipsMatch: z.nullable(z.boolean()),
 });
 
+const nullableSats = z.nullable(amount);
+const walletFields = { confirmedSats: nullableSats, unconfirmedSats: nullableSats };
+const lightningBalances = z.nullable(z.object({
+  ...walletFields,
+  localSats: nullableSats,
+  remoteSats: nullableSats,
+}));
+const operationsBalances = z.object({
+  network: z.literal('regtest'),
+  capturedAt: z.iso.datetime(),
+  core: z.nullable(z.object(walletFields)),
+  provider: lightningBalances,
+  alice: lightningBalances,
+});
+export type OperationsBalances = z.infer<typeof operationsBalances>;
+
 function fetchApi(path: string, options: RequestInit = {}) {
   return fetch(path, {
     ...options,
@@ -63,6 +79,7 @@ export const api = {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amountSats }), signal,
   }),
   preflight: () => request('/v1/preflight', preflight, {}, true),
+  operationsBalances: (signal: AbortSignal) => request('/v1/operations/balances', operationsBalances, { signal }),
   async session() {
     const response = await fetchApi('/v1/auth/session');
     if (response.status === 401) return null;

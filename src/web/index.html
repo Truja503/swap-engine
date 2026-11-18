@@ -140,6 +140,46 @@
       <a class="text-link" href="#account">Open account <span aria-hidden="true">↗</span></a>
     </article>
     <div id="admin-dashboard" hidden>
+    <article class="panel inset" aria-labelledby="balance-title">
+      <div class="panel-header">
+        <h2 id="balance-title">Wallets and Lightning liquidity</h2>
+        <button class="secondary" id="balance-refresh" type="button">Refresh balances</button>
+      </div>
+      <div class="balance-meta">
+        <p class="status" id="balance-status" role="status">Balance snapshot unavailable.</p>
+        <time id="balance-time" hidden></time>
+      </div>
+      <section class="balance-group" aria-labelledby="onchain-balances-title">
+        <h3 id="onchain-balances-title">On-chain wallets</h3>
+        <div class="balance-grid">
+          <div class="balance-node">
+            <h4>Bitcoin Core</h4>
+            <dl><div><dt>Confirmed</dt><dd id="core-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="core-unconfirmed">Unavailable</dd></div></dl>
+          </div>
+          <div class="balance-node">
+            <h4>LND Provider</h4>
+            <dl><div><dt>Confirmed</dt><dd id="provider-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="provider-unconfirmed">Unavailable</dd></div></dl>
+          </div>
+          <div class="balance-node">
+            <h4>LND Alice</h4>
+            <dl><div><dt>Confirmed</dt><dd id="alice-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="alice-unconfirmed">Unavailable</dd></div></dl>
+          </div>
+        </div>
+      </section>
+      <section class="balance-group" aria-labelledby="channel-balances-title">
+        <h3 id="channel-balances-title">Lightning channels</h3>
+        <div class="balance-grid">
+          <div class="balance-node">
+            <h4>LND Provider</h4>
+            <dl><div><dt>Local</dt><dd id="provider-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="provider-remote">Unavailable</dd></div></dl>
+          </div>
+          <div class="balance-node">
+            <h4>LND Alice</h4>
+            <dl><div><dt>Local</dt><dd id="alice-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="alice-remote">Unavailable</dd></div></dl>
+          </div>
+        </div>
+      </section>
+    </article>
     <article class="panel inset">
       <div class="panel-header"><h2>Regtest preflight</h2><button class="secondary" id="refresh" type="button">Refresh</button></div>
       <p class="status" id="diagnostic-status" role="status">Checking diagnostic availability…</p>
@@ -158,10 +198,6 @@
     <article class="panel inset">
       <div class="panel-header"><h2>Fee accounting</h2><span class="tag">ACCOUNTING UNAVAILABLE</span></div>
       <dl class="metric-grid"><div><dt>Collected service fees</dt><dd>—</dd></div><div><dt>Actual network fees</dt><dd>—</dd></div><div><dt>Net operational revenue</dt><dd>—</dd></div></dl>
-    </article>
-    <article class="panel inset">
-      <div class="panel-header"><h2>Channel liquidity</h2><span class="tag">DIRECTIONAL DATA UNAVAILABLE</span></div>
-      <dl class="metric-grid"><div><dt>Inbound liquidity</dt><dd>—</dd></div><div><dt>Outbound liquidity</dt><dd>—</dd></div></dl>
     </article>
     <article class="panel inset">
       <div class="panel-header"><h2>Transactions</h2><span class="tag">REPORTING UNAVAILABLE</span></div>

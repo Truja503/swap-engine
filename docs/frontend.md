@@ -29,7 +29,7 @@ npm run test:web
 
 To use installed Edge from PowerShell, set `$env:WEB_TEST_BROWSER_CHANNEL = 'msedge'` before `npm run test:web`. The browser tests save screenshots in `dist/web-verification`. Set `$env:WEB_TEST_RECORD = '1'` to save a WebM of the full-screen opening, 3D entrance, manual drag and linked rotation. Browser recording requires Playwright's FFmpeg binary, which can be installed with `npx playwright install ffmpeg`.
 
-Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 170 tests with 2 skips, and 5 browser tests passed. Browser coverage includes mouse drag, touch swipe, keyboard and selector changes, linked rotation, fast input bursts, stale quotes, expiry, axe scans, reduced motion and seven viewport sizes from 320 to 1440 pixels wide.
+Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 170 tests with 2 skips, and 6 browser tests passed. Browser coverage includes the Operations balance contract, gestures, linked rotation, fast input, quote expiry, stale responses, axe scans, reduced motion and seven viewport sizes from 320 to 1440 pixels wide.
 
 ## Cube controls
 
@@ -45,8 +45,12 @@ The rotation cycle is On-chain → Lightning → Liquid → On-chain. A direct s
 | Rails | Lightning → On-chain is the only quote route. On-chain → Lightning and routes involving Liquid can be selected and show an unavailable state. Execution is disabled because the reverse POST returns 503. |
 | Status and history | The frontend leaves these unavailable until the backend can verify swap ownership. Contract data from public swap lookups is excluded. |
 | Account | Optional same-origin session integration for the supplied login, session and logout contract. The baseline returns 404 for those endpoints, which disables sign-in. The browser keeps the CSRF token in memory and uses it for logout. It expects the session expiry in epoch milliseconds. |
-| Operations | The UI requires a fresh verified ADMIN session before revealing the admin view. On a regtest read-only backend it can read preflight, including structured 503 reports. The role gate is a UI condition. The backend must authorize any future protected metrics, transaction or liquidity endpoint. |
-| Reporting | Admin transaction lists, actual fees, earned fees, usable directional channel liquidity, HTLC counts, Alice node status, and revenue remain unavailable. Current aggregate on-chain and incoming liquidity do not establish the directional values required by the dashboard. |
+| Operations | The UI requires a verified ADMIN session before revealing the admin view. On a regtest read-only backend it can read preflight, including structured 503 reports. The balance panel reads the authenticated endpoint below and shows unavailable data explicitly. |
+| Reporting | Admin transaction lists, actual and earned fees, HTLC counts, Alice's preflight status, and revenue remain unavailable. |
+
+### Operations balances
+
+The frontend expects a same-origin `GET /v1/operations/balances` protected by server-side ADMIN authorization. A successful snapshot has `network: "regtest"` and `capturedAt` as an ISO 8601 UTC string. It includes `core`, `provider`, and `alice`. All three include `confirmedSats` and `unconfirmedSats`. The two LND entries also include `localSats` and `remoteSats` for Lightning channels. Amounts are nonnegative safe integers in sats or `null`. A whole node may be `null` if unavailable. Non-success or malformed responses clear the snapshot and display unavailable. The client does not derive balances from other endpoints.
 
 The deployment baseline is `integration/reverse-swap-regtest` at `f9bac1a6cf34478109b680492008f39d00ab6e28`. Browser auth tests intercept the supplied contract and exercise sign-in, role verification and logout. They cannot verify the backend cookie flags, CSRF enforcement or role authorization until the backend routes land. The repo audit reports four inherited dependency advisories in bitcoinjs-lib, ecpair, valibot and Zod. Dependency remediation belongs to the backend integration work.
 

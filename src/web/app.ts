@@ -2,10 +2,12 @@ import { api } from './api.js';
 import { mountAuth } from './auth.js';
 import { fonts } from './fonts.js';
 import { playOpening } from './opening.js';
+import { mountOperationsBalances } from './operations.js';
 import { mountQuote } from './quote.js';
 import { get, integer, text } from './ui.js';
 
 const setQuoteVisible = mountQuote();
+const setBalancesActive = mountOperationsBalances();
 void fonts;
 const environment = api.health().then(health => {
   get('mode').dataset.mode = health.mode;
@@ -68,6 +70,7 @@ function navigate(focus: boolean) {
   for (const view of views) view.hidden = current !== view;
   document.querySelector<HTMLElement>('.footer-squares')!.dataset.viewActive = current.id === 'track' ? 'account' : current.id;
   setQuoteVisible(current.id === 'swap');
+  setBalancesActive(current.id === 'operations' && admin);
   for (const link of document.querySelectorAll('nav a')) {
     if (link.getAttribute('href') === '#' + current.id) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -84,5 +87,6 @@ navigate(false);
 if (!get('swap').hidden) playOpening();
 mountAuth(allowed => {
   admin = allowed;
+  setBalancesActive(admin && !get('operations').hidden);
   if (admin && !get('operations').hidden) void loadDiagnostics();
 });

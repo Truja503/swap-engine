@@ -190,15 +190,63 @@ test('regtest page renders a real preflight 503 report with offline test ports',
   await page.route('**/v1/auth/session', route => route.fulfill({ json: session('ADMIN') }));
   await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#operations`);
   await page.getByText('Regtest setup requires attention.').waitFor();
+  await page.getByText('Balance snapshot unavailable.', { exact: true }).waitFor();
+  assert.equal(await page.locator('#core-confirmed').textContent(), 'Unavailable');
+  assert.equal(await page.locator('#balance-time').isVisible(), false);
   assert.equal(await page.locator('#mode').getAttribute('data-mode'), 'regtest');
   assert.equal(await page.locator('#core').textContent(), 'Unavailable');
   assert.equal(await page.locator('#height').textContent(), '—');
   assert.equal(await page.locator('#lnd').textContent(), 'Unavailable');
   await page.locator('#blockers').getByText('no active channels', { exact: true }).count().then(count => assert.equal(count, 0));
   await page.locator('#blockers').getByText('channel status unavailable', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Refresh' }).click();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.getByText('Regtest setup requires attention.').waitFor();
   await page.screenshot({ path: 'dist/web-verification/admin.png', fullPage: true });
+});
+
+test('administrator balances show wallet and channel snapshots, distinguish zero from unknown, and clear on denial', async context => {
+  const f = await setup();
+  context.after(f.cleanup);
+  const server = createApi(f.manager, async () => { throw new Error('Offline test port'); }, undefined, 'regtest');
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  context.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
+  context.after(() => browser.close());
+  const page = await browser.newPage({ reducedMotion: 'reduce' });
+  await page.route('**/v1/auth/session', route => route.fulfill({ json: session('ADMIN') }));
+  let denied = false;
+  const capturedAt = '2026-11-18T06:20:00.000Z';
+  await page.route('**/v1/operations/balances', route => denied
+    ? route.fulfill({ status: 403, json: { error: 'FORBIDDEN' } })
+    : route.fulfill({ json: {
+      network: 'regtest', capturedAt,
+      core: { confirmedSats: 100_000, unconfirmedSats: 0 },
+      provider: { confirmedSats: 52_000, unconfirmedSats: null, localSats: 0, remoteSats: 21_000 },
+      alice: { confirmedSats: 0, unconfirmedSats: 925, localSats: null, remoteSats: 0 },
+    } }));
+  await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#operations`);
+  await page.getByText('Regtest snapshot', { exact: true }).waitFor();
+  for (const [id, amount] of Object.entries({
+    'core-confirmed': '100,000 sats', 'core-unconfirmed': '0 sats',
+    'provider-confirmed': '52,000 sats', 'provider-unconfirmed': 'Unavailable',
+    'provider-local': '0 sats', 'provider-remote': '21,000 sats',
+    'alice-confirmed': '0 sats', 'alice-unconfirmed': '925 sats',
+    'alice-local': 'Unavailable', 'alice-remote': '0 sats',
+  })) {
+    assert.equal(await page.locator('#' + id).textContent(), amount);
+  }
+  assert.equal(await page.locator('#balance-time').getAttribute('datetime'), capturedAt);
+  await audit(page);
+  await page.screenshot({ path: evidence + '/operations-balances.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+  await page.screenshot({ path: evidence + '/operations-balances-mobile.png', fullPage: true });
+  denied = true;
+  await page.getByRole('button', { name: 'Refresh balances', exact: true }).click();
+  await page.getByText('Balance snapshot unavailable.', { exact: true }).waitFor();
+  assert.equal(await page.locator('#provider-remote').textContent(), 'Unavailable');
+  assert.equal(await page.locator('#balance-time').isVisible(), false);
 });
 
 function session(role: 'USER' | 'ADMIN') {
@@ -217,6 +265,10 @@ test('login success requires independent session verification and logout is CSRF
   const page = await browser.newPage({ reducedMotion: 'reduce' });
   let signedIn = false;
   let loginCount = 0;
+  let balanceRequests = 0;
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/v1/operations/balances') balanceRequests++;
+  });
   await page.route('**/v1/auth/session', route => signedIn
     ? route.fulfill({ json: session('USER') })
     : route.fulfill({ status: 401, json: {} }));
@@ -249,6 +301,7 @@ test('login success requires independent session verification and logout is CSRF
   await page.getByRole('link', { name: 'Operations' }).click();
   await page.getByText('Administrator role required.').waitFor();
   assert.equal(await page.locator('#admin-dashboard').isVisible(), false);
+  assert.equal(balanceRequests, 0);
   await page.getByRole('link', { name: 'Account', exact: true }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await page.getByText('Signed out.', { exact: true }).waitFor();

@@ -62,6 +62,16 @@ This mapping is for Lightning → On-chain on regtest once the authenticated exe
 
 Integration needs exact schemas and routes for capability, destination and wallet ownership, quote expiry and fees, idempotent create or lookup, and status and recovery. The UI should use only the public data those contracts require. Forward swaps and Liquid remain unavailable.
 
+#### Prepared-swap contract under review
+
+The preliminary owned gateway lists server-prepared swaps with `GET /v1/swaps` and supplies the prepared quote and `claimDestination`. The controlled flow explicitly rejects the freely editable `POST /v1/quotes` with `USE_PREPARED_SWAP`. Review should therefore show the selected prepared swap's server-bound terms and revision. An editable preview quote cannot authorize this flow.
+
+- Confirmation maps to `POST /v1/swaps/reverse` with `{preparedSwapId, expectedRevision}` and an `Idempotency-Key` only after explicit confirmation and backend authorization. The approval lifetime and prepared quote expiry need distinct display and validation rules.
+- `GET /v1/swaps/:id` provides owned state, revision, and `allowedActions`. `202 RUNNING` stays pending and `202 RECONCILIATION_REQUIRED` opens status and recovery guidance. A revision conflict requires refreshing the prepared swap and reviewing changes. A successful operation response is followed by the owned status read.
+- `POST /v1/swaps/:id/reconcile` uses the current `expectedRevision` and its own idempotency key. Display the returned evidence or recovery recommendation. Recommendations such as `FUND`, `CLAIM`, or `SETTLE` do not authorize additional browser actions.
+
+Before wiring requests, confirm the mount and capability signal for the controlled gateway, the browser session and CSRF bridge to the owner identity, the final response schemas, and the allowed presentation of invoice and evidence fields. The preliminary Bearer credential remains outside the browser integration. Browser coverage should exercise missing capability, disabled actions, session loss, stale revision, same-key retry, uncertain completion, and owned evidence and recovery. The current app has no submission path for the preliminary gateway.
+
 ### Operations balances
 
 The frontend expects a same-origin `GET /v1/operations/balances` protected by server-side ADMIN authorization. A successful snapshot has `network: "regtest"` and `capturedAt` as an ISO 8601 UTC string. It includes `core`, `provider`, and `alice`. All three include `confirmedSats` and `unconfirmedSats`. The two LND entries also include `localSats` and `remoteSats` for Lightning channels. Amounts are nonnegative safe integers in sats or `null`. A whole node may be `null` if unavailable. Non-success or malformed responses clear the snapshot and display unavailable. The client does not derive balances from other endpoints.

@@ -44,15 +44,14 @@
         <path d="M175 425h810l-116-71H292zM317 425l83-71m91 71 27-71m151 71-26-71m200 71-82-71M231 390h696" stroke="#dedede"/>
       </svg>
       <div class="stage-shadow" aria-hidden="true"></div>
-      <div class="cube-viewport">
       <form id="quote-form" class="cube-scene" novalidate aria-label="Swap quote">
       <article class="cube-unit cube-outer cube-send" id="send-cube" aria-labelledby="send-label">
         <div class="cube-rotor">
           <div class="cube-plane plane-top" aria-hidden="true"><span class="plane-mark">S / 01</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-bottom" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-back" aria-hidden="true"><span class="plane-mark">+</span></div>
-          <div class="cube-plane plane-left" aria-hidden="true"><span class="plane-mark">+</span></div>
-          <div class="cube-plane plane-right" aria-hidden="true"><span class="plane-mark">+</span></div>
+          <div class="cube-plane plane-left" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
+          <div class="cube-plane plane-right" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-front">
             <header class="face-header"><h2 id="send-label">SEND</h2></header>
             <div class="rail-field"><svg class="rail-icon icon" aria-hidden="true"><use id="send-icon" href="#icon-lightning"/></svg><label class="sr-only" for="send-network">Send network</label><select id="send-network" name="send-network"><option value="onchain">On-chain</option><option value="lightning" selected>Lightning</option><option value="liquid">Liquid</option></select><svg class="select-icon icon" aria-hidden="true"><use href="#icon-select"/></svg></div>
@@ -66,8 +65,8 @@
           <div class="cube-plane plane-top" aria-hidden="true"><span class="plane-mark">R / 03</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-bottom" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-back" aria-hidden="true"><span class="plane-mark">+</span></div>
-          <div class="cube-plane plane-left" aria-hidden="true"><span class="plane-mark">+</span></div>
-          <div class="cube-plane plane-right" aria-hidden="true"><span class="plane-mark">+</span></div>
+          <div class="cube-plane plane-left" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
+          <div class="cube-plane plane-right" aria-hidden="true"><span class="plane-mark">+</span><span class="turn-label"></span></div>
           <div class="cube-plane plane-front">
             <header class="face-header"><h2 id="receive-label">RECEIVE</h2></header>
             <div class="rail-field"><svg class="rail-icon icon" aria-hidden="true"><use id="receive-icon" href="#icon-onchain"/></svg><label class="sr-only" for="receive-network">Receive network</label><select id="receive-network" name="receive-network"><option value="onchain" selected>On-chain</option><option value="lightning">Lightning</option><option value="liquid">Liquid</option></select><svg class="select-icon icon" aria-hidden="true"><use href="#icon-select"/></svg></div>
@@ -96,7 +95,6 @@
         </div>
       </article>
       </form>
-      </div>
     </div>
   </section>
 

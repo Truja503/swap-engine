@@ -410,23 +410,37 @@ test('actual mouse and touch gestures rotate in both directions and linked anima
   await touchPage.getByRole('button', { name: 'Skip intro' }).tap();
   await touchPage.locator('.cube-send').evaluate(cube => Promise.all(cube.getAnimations().map(animation => animation.finished)));
   const cdp = await mobile.newCDPSession(touchPage);
-  const grip = (await touchPage.getByRole('button', { name: 'Rotate send cube' }).boundingBox())!;
-  const x = Math.round(grip.x + grip.width / 2);
-  const y = Math.round(grip.y + grip.height / 2);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 30 }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 74 }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await waitForRails(touchPage, 'liquid', 'onchain');
+  const stack = await touchPage.locator('.cube-scene').evaluate(scene => {
+    const cubes = ['.cube-send', '.cube-swap', '.cube-receive'].map(selector => scene.querySelector<HTMLElement>(selector)!);
+    return cubes.map(cube => [cube.offsetTop, cube.offsetHeight]);
+  });
+  assert.equal(stack[1]![0], stack[0]![0]! + stack[0]![1]!);
+  assert.equal(stack[2]![0], stack[1]![0]! + stack[1]![1]!);
 
-  const viewport = (await touchPage.locator('.cube-viewport').boundingBox())!;
-  const swipeX = Math.round(viewport.x + viewport.width - 24);
-  const swipeY = Math.round(viewport.y + 15);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: swipeX, y: swipeY }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: swipeX - 44, y: swipeY }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: swipeX - 223, y: swipeY }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await touchPage.waitForFunction(() => document.querySelector('.cube-viewport')!.scrollLeft > 100);
-  assert.equal(await touchPage.locator('#send-network').inputValue(), 'liquid');
+  async function swipe(dx: number, dy: number) {
+    const face = (await touchPage.locator('.cube-send .face-header').boundingBox())!;
+    const x = Math.round(face.x + face.width / 2);
+    const y = Math.round(face.y + face.height / 2);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    for (const progress of [.48, 1]) {
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove', touchPoints: [{ x: x + dx * progress, y: y + dy * progress }],
+      });
+    }
+    if (dx) {
+      const transform = await touchPage.locator('.cube-send .cube-rotor').evaluate(rotor => (rotor as HTMLElement).style.transform);
+      assert.match(transform, /rotateY/);
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  }
+  await swipe(74, 0);
+  await waitForRails(touchPage, 'liquid', 'onchain');
+  await swipe(-74, 0);
+  await waitForRails(touchPage, 'lightning', 'onchain');
+  await touchPage.getByRole('button', { name: 'Rotate send cube' }).press('ArrowRight');
+  await waitForRails(touchPage, 'liquid', 'onchain');
+  await swipe(0, -95);
+  await touchPage.waitForFunction(() => window.scrollY > 10);
+  await waitForRails(touchPage, 'liquid', 'onchain');
   await mobile.close();
 });

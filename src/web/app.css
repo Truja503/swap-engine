@@ -129,7 +129,6 @@ dialog::backdrop { background: #16161670; }
   transition: opacity 450ms, scale 450ms;
 }
 .cube-stage:has(.cube-unit:hover) .stage-shadow { opacity: .76; scale: 1.035 1; }
-.cube-viewport { display: contents; }
 .cube-scene {
   position: relative; display: grid; grid-template-columns: repeat(3, var(--edge)); gap: 2px;
   transform: translateX(-1%) rotateY(15deg) rotateX(-10deg);
@@ -247,19 +246,21 @@ html:has(#opening-overlay:not([hidden])) { overflow: hidden; }
 }
 @media (max-width: 700px) {
   .cube-stage {
-    --edge: clamp(11rem, 42vw, 12rem);
-    min-height: 0; perspective: none; padding: 0;
+    --edge: clamp(12rem, 59vw, 15rem);
+    min-height: 0; perspective: none; padding: 3.25rem 0 2.75rem;
   }
-  .cube-viewport {
-    display: block; width: 100%; overflow-x: auto;
-    padding: 48px 18px 44px; scroll-padding-inline: 18px;
-    scroll-snap-type: x proximity; overscroll-behavior-x: contain;
-    scrollbar-width: thin; scrollbar-color: #b5b5b5 transparent;
+  .cube-scene {
+    grid-template-columns: var(--edge); gap: 0;
+    transform: perspective(1900px) rotateY(11deg) rotateX(-8deg);
   }
-  .cube-scene { width: max-content; margin-inline: auto; transform: perspective(1550px) rotateY(9deg) rotateX(-10deg); }
-  .cube-unit { scroll-snap-align: start; }
-  .cube-send .face-header, .cube-receive .face-header, .rail-grip { touch-action: pan-x; }
+  .cube-send { grid-area: 1 / 1; }
+  .cube-swap { grid-area: 2 / 1; }
+  .cube-receive { grid-area: 3 / 1; }
+  .cube-outer, .cube-outer .face-header, .rail-grip { touch-action: pan-y; }
   .rail-grip { right: 0; bottom: 0; place-items: end center; padding-bottom: 5px; }
+  .rail-grip .icon { rotate: -90deg; transform: translateX(-4px); }
+  .cube-outer:hover .rail-grip .icon, .rail-grip:focus-visible .icon { transform: translateX(3px); }
+  .rail-grip:hover .icon { transform: translateX(6px); }
   .stage-shadow { display: none; }
   .plane-front { padding: 10px; }
   .cube-swap .face-header { min-height: 24px; }

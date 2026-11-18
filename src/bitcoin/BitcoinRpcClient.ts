@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import * as btc from 'bitcoinjs-lib';
 import { buildHtlc, type Contract } from './HtlcBuilder.js';
+import { BitcoinConfirmationLookup } from './BitcoinConfirmationLookup.js';
 
 export class BitcoinRpcClient {
   constructor(private url: string, private cookiePath: string, private wallet = 'lqwd-lab') {
@@ -45,9 +46,12 @@ export class BitcoinRpcClient {
     return { txid: tx.getId(), hex: finalized.hex, vout };
   }
   broadcast(hex: string) { return this.call<string>('sendrawtransaction', [hex]); }
-  async confirmedTransaction(txid: string, blockHash: string) {
-    const tx = await this.call<{ hex: string; confirmations?: number; in_active_chain?: boolean }>('getrawtransaction', [txid, true, blockHash]);
-    if (!tx.in_active_chain || (tx.confirmations ?? 0) < 1) throw new Error('Transaction not confirmed in active chain');
-    return tx;
+  /** Compatible with SwapPorts.confirmed; errors never count as unconfirmed evidence. */
+  confirmed(txid: string) {
+    return new BitcoinConfirmationLookup(this).confirmed(txid);
+  }
+  /** A block hint avoids txindex discovery but undergoes the same evidence checks. */
+  confirmedTransaction(txid: string, blockHash: string) {
+    return new BitcoinConfirmationLookup(this).confirmed(txid, blockHash);
   }
 }

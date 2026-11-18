@@ -29,10 +29,13 @@ export class Store {
     const action = this.queue.then(async () => {
       if (this.poisoned) throw new Error('Persistence outcome uncertain; restart and reconcile');
       const draft = structuredClone(this.db);
-      const result = fn(draft);
+      const result = structuredClone(fn(draft));
+      // Detach caller-owned objects before the first await so memory and disk
+      // commit the same immutable snapshot, even if an adapter retains a reference.
+      const committed = structuredClone(draft);
       const temp = join(this.directory, 'state.tmp');
       const file = await open(temp, 'w', 0o600);
-      try { await file.writeFile(JSON.stringify(draft)); await file.sync(); } finally { await file.close(); }
+      try { await file.writeFile(JSON.stringify(committed)); await file.sync(); } finally { await file.close(); }
       try {
         await rename(temp, join(this.directory, 'state.json'));
       // Persist the directory entry on POSIX; Windows does not support directory fsync.
@@ -41,8 +44,8 @@ export class Store {
           try { await directory.sync(); } finally { await directory.close(); }
         }
       } catch (error) { this.poisoned = true; throw error; }
-      this.db = draft;
-      return structuredClone(result);
+      this.db = committed;
+      return result;
     });
     this.queue = action.catch(() => {});
     return action;

@@ -1,0 +1,10 @@
+{
+  "network": "regtest",
+  "wallet": "lqwd-lab",
+  "txid": "bcd16e1bfa03a65a7013a88a1f0de6e85dde8f530ddd5dd7385b929204522e64",
+  "vout": 0,
+  "destination": "bcrt1qz62y94lnjfj4sqmzwsap2fvleqxkua95znqfwj",
+  "amountSats": 50000,
+  "maxFeeSats": 1000,
+  "broadcast": false
+}

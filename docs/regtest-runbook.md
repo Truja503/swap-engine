@@ -30,9 +30,9 @@ automatically overwrite existing configuration.
 npm ci
 npm run build
 npm test
-cp .env.example .env
-# Review and correct only the application .env paths locally.
-node --env-file=.env --import tsx scripts/inspect.ts
+cp deploy/regtest.env.example .env.regtest
+# Review and correct only the application .env.regtest paths locally.
+node --env-file=.env.regtest --import tsx scripts/inspect.ts
 ```
 
 All four checks must pass before wiring live actions. Do not copy cookie content,

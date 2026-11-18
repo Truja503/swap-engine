@@ -131,11 +131,42 @@ impl Quote {
         if self.id != request.quote || self.intent != request.intent {
             return Err(AdapterError::InvalidQuote);
         }
+        validate_regtest_intent(&request.intent)?;
         if now >= self.expires_at {
             return Err(AdapterError::QuoteExpired);
         }
         Ok(())
     }
+}
+
+pub fn validate_regtest_intent(intent: &Intent) -> AdapterResult<()> {
+    match intent {
+        Intent::Boarding { credit, .. } => {
+            if *credit == Amount::ZERO {
+                return Err(AdapterError::LimitsExceeded);
+            }
+        }
+        Intent::Transfer {
+            recipient, amount, ..
+        } => {
+            if *amount == Amount::ZERO {
+                return Err(AdapterError::LimitsExceeded);
+            }
+            if !recipient.encode().starts_with("tark1") {
+                return Err(AdapterError::NetworkMismatch);
+            }
+        }
+        Intent::Offboarding {
+            recipient, amount, ..
+        } => {
+            if *amount == Amount::ZERO {
+                return Err(AdapterError::LimitsExceeded);
+            }
+            crate::offboard::checked_address(recipient.clone())
+                .map_err(|_| AdapterError::NetworkMismatch)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -301,3 +301,88 @@ async fn mock_offboarding_reorg_removes_confirmation_evidence_without_resubmissi
     assert_eq!(adapter.proof(id).await, Ok(None));
     assert_eq!(adapter.submit_calls, 1);
 }
+
+#[tokio::test]
+async fn quote_validation_rejects_zero_amounts_and_non_regtest_destinations() {
+    use bitcoin::{key::TweakedPublicKey, XOnlyPublicKey};
+
+    let key: XOnlyPublicKey = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        .parse()
+        .unwrap();
+    let tap = TweakedPublicKey::dangerous_assume_tweaked(key);
+    let input = VtxoId(OutPoint::new(Txid::from_byte_array([9; 32]), 0));
+    let expires_at = SystemTime::now() + MAX_QUOTE_TTL;
+    let fee_caps = FeeCaps {
+        operator: Amount::ZERO,
+        bitcoin: Amount::ZERO,
+    };
+
+    for bad_zero in [
+        Intent::Boarding {
+            funding: input.0,
+            credit: Amount::ZERO,
+        },
+        Intent::Transfer {
+            input,
+            recipient: ark_core::ArkAddress::new(bitcoin::Network::Regtest, key, tap),
+            amount: Amount::ZERO,
+        },
+        Intent::Offboarding {
+            input,
+            recipient: Address::p2tr_tweaked(tap, bitcoin::Network::Regtest).into_unchecked(),
+            amount: Amount::ZERO,
+        },
+    ] {
+        let quote = Quote {
+            id: QuoteId(7),
+            intent: bad_zero.clone(),
+            fee_caps,
+            expires_at,
+        };
+        let req = Submission {
+            id: OperationId(7),
+            quote: QuoteId(7),
+            intent: bad_zero,
+        };
+        assert_eq!(
+            quote.validate_submission(&req, SystemTime::now()),
+            Err(AdapterError::LimitsExceeded)
+        );
+    }
+
+    for bad_net in [
+        Intent::Transfer {
+            input,
+            recipient: ark_core::ArkAddress::new(bitcoin::Network::Bitcoin, key, tap),
+            amount: Amount::from_sat(1_000),
+        },
+        Intent::Offboarding {
+            input,
+            recipient: Address::p2tr_tweaked(tap, bitcoin::Network::Bitcoin).into_unchecked(),
+            amount: Amount::from_sat(1_000),
+        },
+        Intent::Offboarding {
+            input,
+            recipient: "1BitcoinEaterAddressDontSendf59kuE"
+                .parse::<Address<bitcoin::address::NetworkUnchecked>>()
+                .unwrap(),
+            amount: Amount::from_sat(1_000),
+        },
+    ] {
+        let quote = Quote {
+            id: QuoteId(8),
+            intent: bad_net.clone(),
+            fee_caps,
+            expires_at,
+        };
+        let req = Submission {
+            id: OperationId(8),
+            quote: QuoteId(8),
+            intent: bad_net,
+        };
+        assert_eq!(
+            quote.validate_submission(&req, SystemTime::now()),
+            Err(AdapterError::NetworkMismatch)
+        );
+    }
+}

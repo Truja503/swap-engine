@@ -15,6 +15,8 @@ export function mountQuote() {
   let pair = defaultPair;
   let aligned = true;
   let visible = false;
+  let controlled: boolean | 'unavailable' | null = null;
+  let csrf: string | undefined;
   let revision = 0;
   let quote: Quote | undefined;
   let pending: { controller: AbortController; work: Promise<Quote | undefined> } | undefined;
@@ -57,7 +59,7 @@ export function mountQuote() {
     const version = revision;
     form.dataset.loading = 'true';
     status('Quoting route…');
-    const work = api.quote(value, active.signal).then(result => {
+    const work = api.quote(value, active.signal, csrf).then(result => {
       if (version !== revision) return;
       const totals = quoteTotals(result, value);
       quote = result;
@@ -83,6 +85,12 @@ export function mountQuote() {
 
   function schedule(delay: number) {
     if (!visible) return;
+    if (controlled !== false) {
+      action.disabled = controlled !== true || !aligned || !canQuote(pair);
+      status(controlled === true ? action.disabled ? 'Route unavailable' : 'Review a prepared swap.'
+        : controlled === 'unavailable' ? 'Quote service unavailable.' : 'Checking quote availability…');
+      return;
+    }
     const value = principal();
     action.disabled = !aligned || !canQuote(pair) || value === undefined;
     if (value === undefined) amount.setAttribute('aria-invalid', 'true');
@@ -111,8 +119,12 @@ export function mountQuote() {
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (controlled === true) {
+      if (aligned && canQuote(pair)) location.hash = 'track';
+      return;
+    }
     const value = principal();
-    if (!aligned || !canQuote(pair) || value === undefined || dialog.open) return;
+    if (controlled !== false || !aligned || !canQuote(pair) || value === undefined || dialog.open) return;
     window.clearTimeout(debounce);
     if (quote && quote.expiresAt <= Date.now()) invalidate();
     const version = revision;
@@ -142,15 +154,25 @@ export function mountQuote() {
     dialog.showModal();
   });
 
-  return (next: boolean) => {
-    if (visible === next) return;
-    visible = next;
-    if (!visible) {
-      if (!quote) invalidate();
-      return;
-    }
-    if (quote && quote.expiresAt > Date.now()) return;
-    invalidate();
-    schedule(0);
+  return {
+    setVisible(next: boolean) {
+      if (visible === next) return;
+      visible = next;
+      if (!visible) {
+        if (!quote) invalidate();
+        return;
+      }
+      if (quote && quote.expiresAt > Date.now()) return;
+      invalidate();
+      schedule(0);
+    },
+    setContext(configured: boolean | 'unavailable' | null, csrfToken?: string) {
+      if (controlled === configured && csrf === csrfToken) return;
+      controlled = configured;
+      csrf = csrfToken;
+      amount.readOnly = configured === true;
+      invalidate();
+      schedule(0);
+    },
   };
 }

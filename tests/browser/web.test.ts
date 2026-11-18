@@ -397,6 +397,127 @@ test('login success requires independent session verification and logout is CSRF
   assert.deepEqual(local, [0, 0]);
 });
 
+test('prepared swaps use verified terms, durable idempotency and separate reconciliation', async context => {
+  const f = await setup();
+  context.after(f.cleanup);
+  const server = createApi(f.manager, async () => { throw new Error('Offline test port'); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  context.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
+  context.after(() => browser.close());
+  const page = await browser.newPage({ reducedMotion: 'reduce' });
+  const id = '5f962d5f-1fed-43f2-9d66-f0ccfca6595f';
+  const quoteId = 'baaba8fe-d8db-483f-9599-011fa774ba61';
+  const destination = 'bcrt1q8dfp6nje5y8zjpsmjevlecq8f6plqfhmnhqxgq';
+  const approvedUntil = Date.now() + 120_000;
+  const expiresAt = Date.now() - 600_000;
+  const captured: Array<{ key: string; csrf: string; body: unknown; authorization?: string }> = [];
+  const quotes: string[] = [];
+  let revision = 7;
+  let enabled = false;
+  let recovering = false;
+  let completed = false;
+  const snapshot = () => ({
+    network: 'regtest', id, revision, claimDestination: destination,
+    state: completed ? 'COMPLETED' : 'INVOICE_CREATED',
+    quote: {
+      id: quoteId, expiresAt,
+      amountSats: 50_000, serviceFeeSats: 750, invoiceSats: 50_750, fundingReserveSats: 1000, claimFeeSats: 500,
+    },
+    payment: { status: completed ? 'SUCCEEDED' : 'NOT_STARTED', feeSats: completed ? 0 : null, valueSats: 50_750 },
+    funding: { txid: completed ? 'a'.repeat(64) : null, feeSats: completed ? 247 : null },
+    claim: { txid: completed ? 'b'.repeat(64) : null, feeSats: 500, netSats: 49_500 },
+    execution: { status: completed ? 'COMPLETED' : recovering ? 'RECONCILIATION_REQUIRED' : 'NOT_STARTED', approvedUntil },
+    allowedActions: completed ? [] : recovering ? ['RECONCILE'] : ['EXECUTE'],
+  });
+  await page.route('**/v1/auth/session', route => route.fulfill({ json: session('USER') }));
+  await page.route('**/v1/reverse/availability', route => route.fulfill({ json: {
+    network: 'regtest', liveSwapsEnabled: false, controlledReverseConfigured: true,
+    executionAvailable: enabled && !recovering && !completed, recoveryAvailable: true, preparedSwapIds: [id],
+  } }));
+  await page.route('**/v1/quotes', route => {
+    quotes.push(route.request().method());
+    return route.fulfill({ status: 409, json: { error: 'USE_PREPARED_SWAP' } });
+  });
+  await page.route('**/v1/swaps', route => route.fulfill({ json: { network: 'regtest', swaps: [snapshot()] } }));
+  await page.route('**/v1/swaps/' + id, route => route.fulfill({ json: snapshot() }));
+  await page.route('**/v1/swaps/reverse', route => {
+    const headers = route.request().headers();
+    captured.push({ key: headers['idempotency-key']!, csrf: headers['x-csrf-token']!,
+      body: route.request().postDataJSON(), authorization: headers.authorization });
+    if (captured.length === 1) return route.abort('failed');
+    recovering = captured.length === 2;
+    return route.fulfill({ status: 202, json: {
+      operationId: 'c'.repeat(64), statusUrl: '/v1/swaps/' + id, status: recovering ? 'RECONCILIATION_REQUIRED' : 'RUNNING',
+    } });
+  });
+  await page.route('**/v1/swaps/' + id + '/reconcile', route => {
+    const headers = route.request().headers();
+    captured.push({ key: headers['idempotency-key']!, csrf: headers['x-csrf-token']!,
+      body: route.request().postDataJSON(), authorization: headers.authorization });
+    completed = true;
+    revision++;
+    return route.fulfill({ json: { operationId: 'd'.repeat(64), statusUrl: '/v1/swaps/' + id,
+      status: 'SUCCEEDED', result: { id, state: 'COMPLETED', revision, next: 'DONE' } } });
+  });
+
+  await page.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port + '/');
+  const preparedLink = page.getByRole('link', { name: 'Review prepared swaps' });
+  await preparedLink.waitFor();
+  await page.getByRole('button', { name: 'SWAP', exact: true }).click();
+  const review = page.getByRole('button', { name: 'Review prepared swap', exact: true });
+  await page.getByText('Swap status only. Execution unavailable.').waitFor();
+  assert.equal(await review.isDisabled(), true);
+  enabled = true;
+  await page.getByRole('button', { name: 'Refresh status' }).click();
+  await page.getByText('Prepared swap available for review.').waitFor();
+  await review.click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm prepared swap' });
+  const confirm = dialog.getByRole('button', { name: 'Start prepared swap' });
+  await dialog.getByText(destination, { exact: true }).waitFor();
+  await dialog.getByText('Prepared quote expiry', { exact: true }).waitFor();
+  await dialog.getByText('Execution approval deadline', { exact: true }).waitFor();
+  await dialog.getByText('50,750 sats', { exact: true }).waitFor();
+  await page.screenshot({ path: evidence + '/prepared-swap-review.png' });
+  assert.equal(captured.length, 0);
+  revision++;
+  await confirm.click();
+  await page.getByText('Swap terms or authorization changed. Review the latest status.', { exact: true }).waitFor();
+  assert.equal(captured.length, 0);
+  await review.click();
+  await confirm.click();
+  await page.getByText('Result uncertain. Refresh the swap status before retrying.', { exact: true }).waitFor();
+  assert.deepEqual(captured[0]?.body, { preparedSwapId: id, expectedRevision: 8 });
+  assert.match(captured[0]!.key, /^[A-Za-z0-9_-]{8,128}$/);
+  assert.equal(captured[0]?.csrf, 'test-csrf');
+  assert.equal(captured[0]?.authorization, undefined);
+  const intent = await page.evaluate(() => {
+    const entry = Object.keys(localStorage).find(key => key.endsWith('.execute.once'));
+    return entry ? JSON.parse(localStorage.getItem(entry)!) : null;
+  });
+  assert.deepEqual(intent, { key: captured[0]!.key, body: captured[0]!.body });
+
+  await page.reload();
+  await review.click();
+  await confirm.click();
+  await page.getByText('Result uncertain. Check recovery evidence when available.', { exact: true }).waitFor();
+  assert.deepEqual(captured[1], captured[0]);
+  assert.equal(await review.isDisabled(), true);
+  await page.getByRole('button', { name: 'Check recovery evidence' }).click();
+  await page.getByText('Recovery evidence is complete.', { exact: true }).waitFor();
+  await page.getByText('Swap completed', { exact: true }).waitFor();
+  await page.getByText('b'.repeat(64), { exact: true }).waitFor();
+  assert.notEqual(captured[2]?.key, captured[0]?.key);
+  assert.equal(captured[2]?.csrf, 'test-csrf');
+  assert.deepEqual(captured[2]?.body, { expectedRevision: 8 });
+  assert.deepEqual(quotes, []);
+  await audit(page);
+  await page.screenshot({ path: evidence + '/prepared-swap-status.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+});
+
 test('opening fills the viewport, draws six lines, fades and sequences a 3D entrance', async context => {
   const f = await setup();
   context.after(f.cleanup);

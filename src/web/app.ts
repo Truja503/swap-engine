@@ -1,12 +1,18 @@
-import { api } from './api.js';
+import { api, type Session } from './api.js';
 import { mountAuth } from './auth.js';
 import { fonts } from './fonts.js';
 import { playOpening } from './opening.js';
 import { mountOperationsBalances } from './operations.js';
+import { mountOwnedReverse } from './ownedReverse.js';
 import { mountQuote } from './quote.js';
 import { get, integer, text } from './ui.js';
 
-const setQuoteVisible = mountQuote();
+const quotes = mountQuote();
+let session: Session | null = null;
+const reverse = mountOwnedReverse(configured => {
+  get('prepared-swap-link').hidden = configured !== true;
+  quotes.setContext(configured, session?.csrfToken);
+});
 const setBalancesActive = mountOperationsBalances();
 void fonts;
 const environment = api.health().then(health => {
@@ -69,7 +75,8 @@ function navigate(focus: boolean) {
   const current = views.find(view => '#' + view.id === location.hash) ?? views[0]!;
   for (const view of views) view.hidden = current !== view;
   document.querySelector<HTMLElement>('.footer-squares')!.dataset.viewActive = current.id === 'track' ? 'account' : current.id;
-  setQuoteVisible(current.id === 'swap');
+  quotes.setVisible(current.id === 'swap');
+  reverse.setVisible(current.id === 'track');
   setBalancesActive(current.id === 'operations' && admin);
   for (const link of document.querySelectorAll('nav a')) {
     if (link.getAttribute('href') === '#' + current.id) link.setAttribute('aria-current', 'page');
@@ -85,8 +92,13 @@ refresh.addEventListener('click', () => void loadDiagnostics());
 window.addEventListener('hashchange', () => navigate(true));
 navigate(false);
 if (!get('swap').hidden) playOpening();
-mountAuth(allowed => {
-  admin = allowed;
+mountAuth(next => {
+  if (session !== next) {
+    session = next;
+    quotes.setContext(next ? null : false, next?.csrfToken);
+  } else if (!next) quotes.setContext(false);
+  reverse.setSession(next);
+  admin = next?.user.role === 'ADMIN';
   setBalancesActive(admin && !get('operations').hidden);
   if (admin && !get('operations').hidden) void loadDiagnostics();
 });

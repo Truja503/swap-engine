@@ -75,8 +75,34 @@ assert_resources() {
 }
 
 require_env() {
-  [[ -f "$env_file" && ! -L "$env_file" && -O "$env_file" && $(stat -c '%a' "$env_file") == 600 ]] ||
+  local line key val seen=""
+  local expected_keys="ARK_LAB_WORKTREE ARK_LAB_RPC_PASSWORD ARK_LAB_DB_PASSWORD ARK_LAB_WALLET_PASSWORD ARK_LAB_SIGNER_KEY"
+  [[ ! -L "$root/data" && ! -L "$state" ]] || fail "symlink in lab state path"
+  [[ -f "$env_file" && ! -L "$env_file" && -O "$env_file" &&
+     $(stat -c '%a' "$env_file") == 600 && $(stat -c '%h' "$env_file") == 1 ]] ||
     fail "missing or unsafe $env_file; bootstrap creates it on a fresh lab"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || fail "malformed entry in $env_file"
+    key=${line%%=*}
+    val=${line#*=}
+    case "$key" in
+      ARK_LAB_WORKTREE)
+        [[ "$val" == "$root" ]] || fail "mismatched worktree in $env_file"
+        ;;
+      ARK_LAB_RPC_PASSWORD|ARK_LAB_DB_PASSWORD|ARK_LAB_WALLET_PASSWORD|ARK_LAB_SIGNER_KEY)
+        [[ "$val" =~ ^[a-f0-9]{64}$ ]] || fail "invalid credential format for $key in $env_file"
+        ;;
+      *)
+        fail "unexpected key $key in $env_file"
+        ;;
+    esac
+    [[ " $seen " != *" $key "* ]] || fail "duplicate key $key in $env_file"
+    seen="$seen $key"
+  done <"$env_file"
+  for key in $expected_keys; do
+    [[ " $seen " == *" $key "* ]] || fail "missing $key in $env_file"
+  done
 }
 
 compose() {

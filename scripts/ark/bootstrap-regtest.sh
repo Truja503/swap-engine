@@ -52,12 +52,12 @@ password=$(sed -n 's/^ARK_LAB_WALLET_PASSWORD=//p' "$env_file")
 [[ "$password" =~ ^[a-f0-9]{64}$ ]] || fail "invalid operator wallet credential"
 wallet_status=$(admin_get wallet/status)
 if ! jq -e '.initialized == true' <<<"$wallet_status" >/dev/null; then
-  admin_get wallet/seed | jq -ce 'select(.seed | length > 0)' |
-    jq -c --arg password "$password" '{seed, $password}' |
+  admin_get wallet/seed |
+    jq -ce --rawfile password <(printf '%s' "$password") 'select(.seed | length > 0) | {seed, $password}' |
     admin_post wallet/create || fail "operator wallet creation failed"
 fi
 if ! admin_get wallet/status | jq -e '.unlocked == true' >/dev/null; then
-  jq -cn --arg password "$password" '{$password}' | admin_post wallet/unlock ||
+  jq -cn --rawfile password <(printf '%s' "$password") '{$password}' | admin_post wallet/unlock ||
     # The env unlocker might win the race.
     wait_for "operator wallet unlock" valid_wallet
 fi

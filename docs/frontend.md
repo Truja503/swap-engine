@@ -48,6 +48,20 @@ The rotation cycle is On-chain → Lightning → Liquid → On-chain. A direct s
 | Operations | The UI requires a verified ADMIN session before revealing the admin view. On a regtest read-only backend it can read preflight, including structured 503 reports. The balance panel reads the authenticated endpoint below and shows unavailable data explicitly. |
 | Reporting | Admin transaction lists, actual and earned fees, HTLC counts, Alice's preflight status, and revenue remain unavailable. |
 
+### Reverse swap UI integration
+
+This mapping is for Lightning → On-chain on regtest once the authenticated execution and ownership contracts are integrated and verified. The current review remains quote-only.
+
+| UI step | Backend input needed |
+| --- | --- |
+| Availability | An explicit regtest execution capability and a verified session authorized for the route. Missing, disabled, or unknown capability keeps Start swap disabled. |
+| Review | The server's current quote, its expiry, the exact wallet-approved destination, principal, service fee, estimated claim fee, invoice total, and expected on-chain receipt. Keep unknown routing fees visible. Any change to the route, amount, quote, or destination invalidates the review. |
+| Submit | A user-initiated confirmation using the authenticated endpoint, required CSRF token, and one idempotency key per reviewed intent. If the result is uncertain, resolve it using the backend's supported lookup or same-key replay contract before issuing another intent. |
+| Track | A server-owned swap ID and an authenticated status endpoint with enforced ownership. Present the returned invoice, funding, confirmation, claim, and settlement evidence independently. Show completion only when the backend confirms the terminal state. |
+| Recover | The backend's categorized failure, expiry, refund, or manual-review state and any approved next action. Refresh owned status before offering an action that can change state. |
+
+Integration needs exact schemas and routes for capability, destination and wallet ownership, quote expiry and fees, idempotent create or lookup, and status and recovery. The UI should use only the public data those contracts require. Forward swaps and Liquid remain unavailable.
+
 ### Operations balances
 
 The frontend expects a same-origin `GET /v1/operations/balances` protected by server-side ADMIN authorization. A successful snapshot has `network: "regtest"` and `capturedAt` as an ISO 8601 UTC string. It includes `core`, `provider`, and `alice`. All three include `confirmedSats` and `unconfirmedSats`. The two LND entries also include `localSats` and `remoteSats` for Lightning channels. Amounts are nonnegative safe integers in sats or `null`. A whole node may be `null` if unavailable. Non-success or malformed responses clear the snapshot and display unavailable. The client does not derive balances from other endpoints.

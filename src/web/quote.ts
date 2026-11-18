@@ -11,6 +11,7 @@ export function mountQuote() {
   const status = (message: string) => text('quote-status', message);
   const numbers = ['service', 'claim', 'cost', 'received-preview'];
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  for (const type of ['copy', 'cut']) form.addEventListener(type, event => event.preventDefault());
   let pair = defaultPair;
   let aligned = true;
   let visible = false;

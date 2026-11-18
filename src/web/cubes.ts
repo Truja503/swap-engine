@@ -118,11 +118,13 @@ export function mountCubes(onChange: () => void, onSettle: (pair: Pair) => void)
       await Promise.all(sides.map(side => {
         const cube = cubes[side];
         const direction = directions[side];
-        if (cube.current() !== target[side]) return cube.snap(stepRail(cube.current(), direction), direction);
-        return undefined;
+        if (cube.current() === target[side]) return;
+        cube.root.dataset.rotating = '';
+        return cube.snap(stepRail(cube.current(), direction), direction);
       }));
     }
     aligning = false;
+    for (const side of sides) delete cubes[side].root.dataset.rotating;
     delete get('quote-form').dataset.turning;
     onSettle({ ...target });
   }

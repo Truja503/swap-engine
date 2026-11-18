@@ -70,6 +70,12 @@ test('three faces quote a real route and preserve keyboard, account and responsi
 
   const amount = page.getByRole('textbox', { name: /quote principal/i });
   const swap = page.getByRole('button', { name: 'SWAP', exact: true });
+  assert.equal(await page.locator('#received-preview').evaluate(output => getComputedStyle(output).userSelect), 'none');
+  assert.equal(await amount.evaluate(field => getComputedStyle(field).userSelect), 'text');
+  for (const type of ['copy', 'cut']) {
+    assert.equal(await amount.evaluate((field, eventType) =>
+      field.dispatchEvent(new ClipboardEvent(eventType, { bubbles: true, cancelable: true })), type), false);
+  }
   await amount.fill('50000.5');
   assert.equal(await swap.isDisabled(), true);
   assert.equal(await amount.getAttribute('aria-invalid'), 'true');
@@ -345,9 +351,11 @@ test('actual mouse and touch gestures rotate in both directions and linked anima
     active: form.hasAttribute('data-turning'),
     rotors: [...form.querySelectorAll('.cube-rotor')].map(rotor => rotor.getAnimations().length),
     receiveNext: form.querySelector('.cube-receive .plane-bottom .turn-label')?.textContent,
+    hiddenDetails: form.querySelectorAll('.cube-outer[data-rotating]').length,
   }));
   assert.equal(turning.active, true);
   assert.deepEqual(turning.rotors, [1, 1, 0]);
+  assert.equal(turning.hiddenDetails, 2);
   assert.match(turning.receiveNext!, /LIGHTNING/);
   await page.waitForFunction(() => {
     const turns = [...document.querySelectorAll('.cube-rotor')].flatMap(rotor => rotor.getAnimations());
@@ -355,6 +363,10 @@ test('actual mouse and touch gestures rotate in both directions and linked anima
   });
   await page.screenshot({ path: evidence + '/linked-rotation.png' });
   await waitForRails(page, 'onchain', 'lightning');
+  assert.equal(await page.locator('.cube-send .rail-icon use').getAttribute('href'), '#icon-onchain');
+  const details = page.locator('.cube-send .face-value');
+  assert.match(await details.evaluate(face => getComputedStyle(face).transitionTimingFunction), /ease-in-out/);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.cube-send .face-value')!).opacity === '1');
   assert.deepEqual(await page.locator('#send-cube').evaluate(cube => Reflect.get(cube, 'observed')), ['liquid', 'onchain']);
   assert.equal(observations.length, 1);
 

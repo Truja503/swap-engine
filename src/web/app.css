@@ -133,6 +133,7 @@ dialog::backdrop { background: #16161670; }
   position: relative; display: grid; grid-template-columns: repeat(3, var(--edge)); gap: 2px;
   transform: translateX(-1%) rotateY(15deg) rotateX(-10deg);
   transform-style: preserve-3d; isolation: auto;
+  -webkit-user-select: none; user-select: none;
 }
 .cube-unit { width: var(--edge); height: var(--edge); position: relative; transform-style: preserve-3d; }
 .cube-send { grid-area: 1 / 1; }
@@ -198,12 +199,24 @@ dialog::backdrop { background: #16161670; }
 }
 .rail-field select option { color: #111; background: #fff; }
 .select-icon { position: absolute; right: 3px; pointer-events: none; color: #3b3b3b; width: .88rem; }
-.rail-icon { width: 17px; height: 17px; }
+.rail-icon { width: 19px; height: 19px; }
+.cube-outer .rail-field .rail-icon {
+  transition: opacity 180ms ease-in-out, transform 180ms ease-in-out;
+}
+.cube-outer .face-value, .cube-outer .face-note, .cube-outer .rail-grip {
+  transition: opacity 230ms ease-in-out 65ms, transform 230ms ease-in-out 65ms;
+}
+.cube-outer[data-rotating] :is(.rail-field .rail-icon, .face-value, .face-note, .rail-grip) {
+  opacity: 0; transform: translateY(4px); transition-duration: 95ms; transition-delay: 0ms;
+}
 .face-value {
   min-width: 0; display: flex; align-items: baseline; gap: 5px; margin-top: 12px;
   color: #111; font: 400 clamp(1.12rem, 2.55vw, 2.14rem)/1.1 var(--mono); letter-spacing: -.055em;
 }
-.face-value input { min-width: 0; width: 7ch; padding: 0; background: transparent; border: 0; color: #111; letter-spacing: inherit; }
+.face-value input {
+  min-width: 0; width: 7ch; padding: 0; background: transparent; border: 0; color: #111; letter-spacing: inherit;
+  -webkit-user-select: text; user-select: text;
+}
 .face-value output { min-width: 2ch; }
 .face-value span { color: #515151; font-size: .7rem; letter-spacing: 0; }
 .face-note { color: #515151; margin-top: 7px; font: 400 .67rem/1.35 var(--mono); }

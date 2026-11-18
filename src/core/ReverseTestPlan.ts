@@ -7,9 +7,19 @@ import { validateQuoteFields } from '../utils/satoshiMath.js';
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const pubkey = z.string().regex(/^(02|03)[a-f0-9]{64}$/);
 const amount = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const channelId = z.string().regex(/^[1-9][0-9]{0,19}$/).refine(v => BigInt(v) <= 0xffffffffffffffffn);
+const origin = (protocol: string) => z.string().refine(value => {
+  try { const url = new URL(value); return url.origin === value && url.protocol === protocol &&
+    ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname); } catch { return false; }
+});
+export const reverseRoutingSchema = z.object({ channelId,
+  channelPoint: z.string().regex(/^[a-f0-9]{64}:(0|[1-9][0-9]{0,9})$/).refine(value => Number(value.split(':')[1]) <= 0xffffffff),
+  bitcoinOrigin: origin('http:'), providerOrigin: origin('https:'), payerOrigin: origin('https:') }).strict();
+export type ReverseRouting = z.infer<typeof reverseRoutingSchema>;
 export const reverseTestPlanSchema = z.object({ network: z.literal('regtest'), wallet: z.literal('lqwd-lab'),
   createdAt: amount, tipHeight: z.number().int().min(1).max(499_999_969),
   providerNode: pubkey, payerNode: pubkey, claimDestination: z.string(), refundDestination: z.string(),
+  routing: reverseRoutingSchema,
   contract: z.object({ paymentHash: hash, claimPublicKey: pubkey, refundPublicKey: pubkey, timeoutHeight: amount }).strict(),
   address: z.string(), witnessScript: z.string().regex(/^[a-f0-9]+$/),
   quote: z.object({ id: z.uuid(), amountSats: amount, serviceFeeSats: amount, invoiceSats: amount,
@@ -25,7 +35,7 @@ export function verifyReverseTestPlan(value: unknown): ReverseTestPlan {
   validateQuoteFields(plan.quote);
   if (plan.quote.amountSats !== 50000 || plan.quote.invoiceSats !== 50750 || plan.quote.claimFeeSats !== 500 ||
     plan.quote.fundingReserveSats !== plan.fundingFeeLimitSats || plan.contract.timeoutHeight !== plan.tipHeight + 30 ||
-    plan.providerNode === plan.payerNode) throw new Error('Reverse plan differs from test contract');
+    plan.providerNode === plan.payerNode || plan.routing.providerOrigin === plan.routing.payerOrigin) throw new Error('Reverse plan differs from test contract');
   const contract = buildHtlc(plan.contract);
   if (contract.address !== plan.address || contract.witnessScript.toString('hex') !== plan.witnessScript) throw new Error('Reverse contract reconstruction failed');
   address.toOutputScript(plan.claimDestination, networks.regtest);
@@ -35,11 +45,11 @@ export function verifyReverseTestPlan(value: unknown): ReverseTestPlan {
 }
 
 export function createReverseTestPlan(quote: Quote, tipHeight: number, client: { paymentHash: string; claimPublicKey: string },
-  refundPublicKey: string, destinations: { claim: string; refund: string }, nodes: { provider: string; payer: string }): ReverseTestPlan {
+  refundPublicKey: string, destinations: { claim: string; refund: string }, nodes: { provider: string; payer: string }, routing: ReverseRouting): ReverseTestPlan {
   const contract: Contract = { ...client, refundPublicKey, timeoutHeight: tipHeight + 30 };
   const htlc = buildHtlc(contract);
   return verifyReverseTestPlan({ network: 'regtest', wallet: 'lqwd-lab', createdAt: Date.now(), tipHeight,
-    providerNode: nodes.provider, payerNode: nodes.payer, claimDestination: destinations.claim, refundDestination: destinations.refund,
+    providerNode: nodes.provider, payerNode: nodes.payer, routing, claimDestination: destinations.claim, refundDestination: destinations.refund,
     contract, address: htlc.address, witnessScript: htlc.witnessScript.toString('hex'), quote,
     invoiceExpirySeconds: 3600, invoiceCltvDelta: 80, routingFeeLimitSats: 100, fundingFeeLimitSats: 1000, executionApproved: false });
 }

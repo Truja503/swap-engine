@@ -11,6 +11,10 @@ import type { Invoice } from '../src/lightning/LndClient.js';
 import type { SwapPorts } from '../src/core/SwapCoordinator.js';
 
 export const keys = ECPairFactory(ecc);
+export function routingFixture(channelPoint = 'ef'.repeat(32) + ':0') {
+  return { channelId: '12345', channelPoint, bitcoinOrigin: 'http://127.0.0.1:18443',
+    providerOrigin: 'https://127.0.0.1:8080', payerOrigin: 'https://127.0.0.1:8081' };
+}
 export function fixture() {
   const claimKey = keys.makeRandom(); const refundKey = keys.makeRandom();
   const preimage = randomBytes(32).toString('hex');

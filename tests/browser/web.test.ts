@@ -418,5 +418,15 @@ test('actual mouse and touch gestures rotate in both directions and linked anima
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 74 }] });
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await waitForRails(touchPage, 'liquid', 'onchain');
+
+  const viewport = (await touchPage.locator('.cube-viewport').boundingBox())!;
+  const swipeX = Math.round(viewport.x + viewport.width - 24);
+  const swipeY = Math.round(viewport.y + 15);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: swipeX, y: swipeY }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: swipeX - 44, y: swipeY }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: swipeX - 223, y: swipeY }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await touchPage.waitForFunction(() => document.querySelector('.cube-viewport')!.scrollLeft > 100);
+  assert.equal(await touchPage.locator('#send-network').inputValue(), 'liquid');
   await mobile.close();
 });

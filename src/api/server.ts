@@ -1,43 +1,107 @@
 import { createServer, type IncomingMessage } from 'node:http';
-import { buildHtlc } from '../bitcoin/HtlcBuilder.js';
 import { available, type Balances } from '../liquidity/LiquidityManager.js';
 import type { SwapManager } from '../core/SwapManager.js';
-import { QuoteRequest, QuoteResponse, ReverseRequest, SwapResponse, HealthResponse, LiquidityResponse, ErrorResponse } from './schemas.js';
+import { Sessions, roleDenial, sessionResponse, type AuthOptions } from '../auth/session.js';
+import type { OperationsBalances } from '../operations/Balances.js';
+import { QuoteRequest, QuoteResponse, ReverseRequest, HealthResponse, LiquidityResponse, OperationsBalancesResponse, ErrorResponse, LoginRequest, SessionResponse } from './schemas.js';
 import { ZodError } from 'zod';
 
 async function body(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type']?.split(';')[0] !== 'application/json') throw new SyntaxError('Expected application/json');
-  let text = '';
-  for await (const chunk of req) { text += chunk.toString(); if (Buffer.byteLength(text) > 8192) throw new SyntaxError('Body too large'); }
-  return JSON.parse(text);
+  let bytes = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+    bytes += chunk.length;
+    if (bytes > 8192) throw new SyntaxError('Body too large');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export function createApi(manager: SwapManager, liquidity: () => Promise<Balances>) {
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+export function createApi(
+  manager: SwapManager,
+  liquidity: () => Promise<Balances>,
+  authOptions: AuthOptions = {},
+  operations?: () => Promise<OperationsBalances>,
+) {
+  const auth = new Sessions(authOptions);
   const server = createServer(async (req, res) => {
     const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
+    const noContent = () => { res.writeHead(204, { 'cache-control': 'no-store' }); res.end(); };
+    const deny = (status: 401 | 403) => send(status, { error: status === 401 ? 'AUTH_REQUIRED' : 'FORBIDDEN' });
     try {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (req.method === 'OPTIONS') return noContent();
       if (req.method === 'GET' && path === '/v1/health') return send(200, HealthResponse.parse({ status: 'components-only', liveSwapsEnabled: false, network: 'regtest' }));
       if (req.method === 'POST' && path === '/v1/quotes') {
         const input = QuoteRequest.parse(await body(req));
         return send(201, QuoteResponse.parse(await manager.quote(input.amountSats)));
       }
+      const session = await auth.get(req);
+      if (req.method === 'POST' && path === '/v1/auth/login') {
+        const failed = () => { req.resume(); return send(401, { error: 'INVALID_CREDENTIALS' }); };
+        if (!auth.allowLoginAttempt(req)) return failed();
+        if (session ? !auth.verifyCsrf(req, session) : req.headers.origin !== undefined && !auth.sameOrigin(req)) return failed();
+        try {
+          const input = LoginRequest.parse(await body(req));
+          const next = await auth.login(input.username, input.password);
+          if (!next) return failed();
+          if (session) auth.revoke(session);
+          res.setHeader('set-cookie', auth.cookie(next));
+          return send(200, SessionResponse.parse(sessionResponse(next)));
+        } catch {
+          return failed();
+        }
+      }
+      if (session && !safeMethods.has(req.method ?? '') && !auth.verifyCsrf(req, session)) {
+        return send(403, { error: 'CSRF_REJECTED' });
+      }
+      if (req.method === 'GET' && path === '/v1/auth/session') {
+        if (!session) return deny(401);
+        return send(200, SessionResponse.parse(sessionResponse(session)));
+      }
+      if (req.method === 'POST' && path === '/v1/auth/logout') {
+        if (!session) return deny(401);
+        auth.revoke(session);
+        res.setHeader('set-cookie', auth.cookie());
+        return noContent();
+      }
+      if (path === '/v1/admin' || path.startsWith('/v1/admin/')) {
+        const status = roleDenial(session, 'ADMIN');
+        if (status) return deny(status);
+        return send(503, { error: 'SERVICE_UNAVAILABLE' });
+      }
+      if (req.method === 'GET' && path === '/v1/operations/balances') {
+        const status = roleDenial(session, 'ADMIN');
+        if (status) return deny(status);
+        if (!operations) return send(503, { error: 'OPERATIONS_BALANCES_NOT_CONFIGURED' });
+        try {
+          return send(200, OperationsBalancesResponse.parse(await operations()));
+        } catch {
+          return send(503, { error: 'SERVICE_UNAVAILABLE' });
+        }
+      }
       if (req.method === 'POST' && path === '/v1/swaps/reverse') {
+        const status = roleDenial(session, 'USER');
+        if (status) return deny(status);
         ReverseRequest.parse(await body(req));
         if (!/^[a-zA-Z0-9_-]{8,128}$/.test(String(req.headers['idempotency-key'] ?? ''))) return send(400, ErrorResponse.parse({ error: 'IDEMPOTENCY_KEY_REQUIRED' }));
         return send(503, ErrorResponse.parse({ error: 'LIVE_SWAPS_DISABLED_OBSERVER_AND_RECOVERY_NOT_VERIFIED' }));
       }
       if (req.method === 'GET' && path === '/v1/liquidity') {
+        const status = roleDenial(session, 'ADMIN');
+        if (status) return deny(status);
         try { return send(200, LiquidityResponse.parse(available(manager.store.read(), await liquidity()))); }
         catch { return send(503, ErrorResponse.parse({ error: 'NODE_LIQUIDITY_UNAVAILABLE' })); }
       }
       if (req.method === 'GET' && /^\/v1\/swaps\/[a-f0-9-]{36}$/.test(path)) {
-        const swap = manager.get(path.split('/').at(-1)!);
-        if (!swap) return send(404, ErrorResponse.parse({ error: 'SWAP_NOT_FOUND' }));
-        const contract = buildHtlc(swap.contract);
-        return send(200, SwapResponse.parse({ id: swap.id, state: swap.state, quote: swap.quote, ...swap.contract, address: contract.address, witnessScript: contract.witnessScript.toString('hex'), invoice: swap.invoice, lockupTxid: swap.lockup?.txid, lockupVout: swap.lockup?.vout, claimTxid: swap.claimTxid, refundTxid: swap.refundTxid }));
+        // Persisted swaps have no owner. A session cannot prove access to any record.
+        return send(404, ErrorResponse.parse({ error: 'SWAP_NOT_FOUND' }));
       }
       return send(404, ErrorResponse.parse({ error: 'NOT_FOUND' }));
     } catch (error) {
+      req.resume();
       const invalid = error instanceof ZodError || error instanceof SyntaxError;
       return send(invalid ? 400 : 503, ErrorResponse.parse({ error: invalid ? 'INVALID_REQUEST' : 'SERVICE_UNAVAILABLE' }));
     }

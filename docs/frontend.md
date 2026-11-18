@@ -27,16 +27,22 @@ npx playwright install chromium
 npm run test:web
 ```
 
-To use installed Edge from PowerShell, set `$env:WEB_TEST_BROWSER_CHANNEL = 'msedge'` before `npm run test:web`. The browser tests save screenshots of the quote, account, operations, mobile layout and animation stages in `dist/web-verification`.
+To use installed Edge from PowerShell, set `$env:WEB_TEST_BROWSER_CHANNEL = 'msedge'` before `npm run test:web`. The browser tests save screenshots in `dist/web-verification`. Set `$env:WEB_TEST_RECORD = '1'` to save a WebM of the full-screen opening, 3D entrance, manual drag and linked rotation. Browser recording requires Playwright's FFmpeg binary, which can be installed with `npx playwright install ffmpeg`.
 
-Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 169 tests with 2 skips, and 4 browser tests passed. The browser checks covered keyboard interaction, automated axe scans, reduced motion and widths of 320, 390, 768 and 1440 pixels.
+Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 170 tests with 2 skips, and 5 browser tests passed. Browser coverage includes mouse drag, touch swipe, keyboard and selector changes, linked rotation, fast input bursts, stale quotes, expiry, axe scans, reduced motion and seven viewport sizes from 320 to 1440 pixels wide.
+
+## Cube controls
+
+SEND holds the principal and source selector. SWAP holds the fee breakdown and confirmation action. RECEIVE holds the destination selector and estimated receipt. Change a network in its native selector, drag its cube vertically, or swipe its top control area on touch. On the rotation grip, Down moves to the next rail and Up moves to the previous rail. A grip tap moves forward.
+
+The rotation cycle is On-chain → Lightning → Liquid → On-chain. A direct selector change takes forward quarter turns through each intermediate rail. If both selected rails coincide, the opposite cube rotates forward to the next rail. Quotes wait for both outer cubes to settle. Existing quotes are discarded on rail and amount changes. Amount edits share a short debounce, and a stale response cannot update the face values.
 
 ## Product contracts
 
 | Surface | Current behavior |
 | --- | --- |
 | Swap | `POST /v1/quotes` accepts integer `amountSats` from 10,000 to 1,000,000. Net receipt is principal minus estimated claim fee. Estimated user cost is invoice total minus net receipt. The provider funding reserve is omitted from user costs. Lightning routing fees are unknown. |
-| Rails | Lightning selects the reverse quote. On-chain shows the unavailable forward route. Liquid is a disabled future rail. Execution is disabled because the reverse POST returns 503. |
+| Rails | Lightning → On-chain is the only quote route. On-chain → Lightning and routes involving Liquid can be selected and show an unavailable state. Execution is disabled because the reverse POST returns 503. |
 | Status and history | The frontend leaves these unavailable until the backend can verify swap ownership. Contract data from public swap lookups is excluded. |
 | Account | Optional same-origin session integration for the supplied login, session and logout contract. The baseline returns 404 for those endpoints, which disables sign-in. The browser keeps the CSRF token in memory and uses it for logout. It expects the session expiry in epoch milliseconds. |
 | Operations | The UI requires a fresh verified ADMIN session before revealing the admin view. On a regtest read-only backend it can read preflight, including structured 503 reports. The role gate is a UI condition. The backend must authorize any future protected metrics, transaction or liquidity endpoint. |
@@ -46,7 +52,7 @@ The deployment baseline is `integration/reverse-swap-regtest` at `f9bac1a6cf3447
 
 ## Design and implementation references
 
-The current direction is white with black technical linework, a compact rail selector and a connected three-block SVG. Canvas draws six equal-weight strokes, applies rightward phase-shifted waves and interpolates to sampled letter outlines. The animation runs for 2.9 seconds and leaves the quote form available throughout. Reduced motion starts directly at the blocks. The composition, marks and glyph paths were authored for Swap Engine.
+The current direction uses white and black with architectural linework and six-sided CSS 3D cubes. A full-screen canvas draws six equal-weight strokes, applies rightward phase-shifted waves and interpolates to sampled letter outlines. The overlay fades into the cube entrance and clears after about 3.2 seconds. The keyboard-operable skip control opens the workspace immediately. Reduced motion opens at the working cubes and changes rails without animated turns. The composition, marks and glyph paths were authored for Swap Engine.
 
 Visual review used typography hierarchy and grid alignment from independent showcases and Codrops' examples of interaction that respects reduced motion. Godly redirected to Recent Design, whose page could not be retrieved. [Awwwards](https://www.awwwards.com/) · [Godly](https://godly.website/) · [CSS Design Awards](https://www.cssdesignawards.com/) · [Hoverstat.es](https://www.hoverstat.es/) · [Siteinspire](https://www.siteinspire.com/) · [Codrops Creative Hub](https://tympanus.net/codrops/hub/) · [Codrops motion and accessibility](https://tympanus.net/codrops/2026/03/31/arnaud-roccas-portfolio-from-a-gsap-powered-motion-system-to-fluid-webgl/)
 

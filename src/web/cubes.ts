@@ -1,0 +1,146 @@
+import { defaultPair, linkRail, railIcon, railLabel, rails, stepRail, type Pair, type Rail, type Side, type Turn } from './rails.js';
+import { get, text } from './ui.js';
+
+const sides = ['send', 'receive'] as const;
+const dragThreshold = 34;
+const angle = (degrees: number) => `rotateX(${degrees}deg)`;
+const clamp = (n: number) => Math.max(-32, Math.min(32, n));
+
+function makeCube(side: Side, motion: MediaQueryList) {
+  const root = get(side + '-cube');
+  const selector = get<HTMLSelectElement>(side + '-network');
+  const grip = get<HTMLButtonElement>(side + '-grip');
+  const rotor = root.querySelector<HTMLElement>('.cube-rotor')!;
+  const top = root.querySelector('.plane-top .turn-label')!;
+  const bottom = root.querySelector('.plane-bottom .turn-label')!;
+  let rail = defaultPair[side];
+  let preview = 0;
+  let running: Animation | undefined;
+
+  function show(incoming: Rail, direction: Turn) {
+    const face = direction === 1 ? bottom : top;
+    const other = direction === 1 ? top : bottom;
+    face.textContent = railLabel[incoming].toUpperCase() + '  ' + railIcon[incoming];
+    other.textContent = '';
+  }
+
+  function render() {
+    selector.value = rail;
+    root.dataset.rail = rail;
+    text(side + '-icon', railIcon[rail]);
+    top.textContent = bottom.textContent = '';
+  }
+  render();
+
+  function drag(delta: number) {
+    if (running || motion.matches) return;
+    preview = clamp(delta * .36);
+    const direction = delta < 0 ? -1 : 1;
+    show(stepRail(rail, direction), direction);
+    rotor.style.transform = angle(preview);
+  }
+
+  async function snap(next?: Rail, direction: Turn = 1) {
+    running?.cancel();
+    if (next) show(next, direction);
+    if (!motion.matches) {
+      const animation = rotor.animate([
+        { transform: angle(preview) },
+        { transform: angle(next ? direction * 90 : 0) },
+      ], { duration: next ? 275 - Math.abs(preview) * 2 : 155, easing: 'cubic-bezier(.28,.64,.26,1)', fill: 'forwards' });
+      running = animation;
+      await animation.finished.catch(() => {});
+      if (running !== animation) return;
+      running = undefined;
+      animation.cancel();
+    }
+    rotor.style.transform = '';
+    preview = 0;
+    if (next) rail = next;
+    render();
+  }
+
+  motion.addEventListener('change', event => { if (event.matches) running?.finish(); });
+  return { root, selector, grip, drag, snap, current: () => rail };
+}
+
+export function mountCubes(onChange: () => void, onSettle: (pair: Pair) => void) {
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  const cubes = { send: makeCube('send', motion), receive: makeCube('receive', motion) };
+  let target = { ...defaultPair };
+  const directions: Record<Side, Turn> = { send: 1, receive: 1 };
+  let aligning = false;
+
+  async function align() {
+    if (aligning) return;
+    aligning = true;
+    get('quote-form').dataset.turning = 'true';
+    while (sides.some(side => cubes[side].current() !== target[side])) {
+      await Promise.all(sides.map(side => {
+        const cube = cubes[side];
+        const direction = directions[side];
+        if (cube.current() !== target[side]) return cube.snap(stepRail(cube.current(), direction), direction);
+        return undefined;
+      }));
+    }
+    aligning = false;
+    delete get('quote-form').dataset.turning;
+    onSettle({ ...target });
+  }
+
+  function choose(side: Side, rail: Rail, direction: Turn) {
+    if (target[side] === rail) return false;
+    const next = linkRail(target, side, rail);
+    const other = side === 'send' ? 'receive' : 'send';
+    directions[side] = direction;
+    if (next[other] !== target[other]) directions[other] = 1;
+    target = next;
+    onChange();
+    void align();
+    return true;
+  }
+
+  for (const side of sides) {
+    const cube = cubes[side];
+    cube.selector.addEventListener('change', () => {
+      const selected = cube.selector.value as Rail;
+      cube.selector.value = cube.current();
+      if (rails.includes(selected)) choose(side, selected, 1);
+    });
+    cube.grip.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      choose(side, stepRail(target[side], direction), direction);
+    });
+    cube.grip.addEventListener('click', event => {
+      if (event.detail === 0) choose(side, stepRail(target[side], 1), 1);
+    });
+    let gesture: { id: number; start: number; grip: boolean } | undefined;
+    cube.root.addEventListener('pointerdown', event => {
+      const element = event.target as Element;
+      if (!event.isPrimary || event.button !== 0 || element.closest('select, input, label, button:not(.rail-grip)')) return;
+      if (event.pointerType === 'touch' && !element.closest('.face-header')) return;
+      gesture = { id: event.pointerId, start: event.clientY, grip: !!element.closest('.rail-grip') };
+      cube.root.setPointerCapture(event.pointerId);
+    });
+    cube.root.addEventListener('pointermove', event => {
+      if (gesture?.id === event.pointerId && !aligning) cube.drag(event.clientY - gesture.start);
+    });
+    function end(event: PointerEvent, cancelled: boolean) {
+      if (gesture?.id !== event.pointerId) return;
+      const delta = event.clientY - gesture.start;
+      const tap = gesture.grip && Math.abs(delta) < 4;
+      gesture = undefined;
+      const direction = !tap && delta < 0 ? -1 : 1;
+      if (!cancelled && (tap || Math.abs(delta) >= dragThreshold)) {
+        choose(side, stepRail(target[side], direction), direction);
+      } else if (!aligning) {
+        void cube.snap();
+      }
+    }
+    cube.root.addEventListener('pointerup', event => end(event, false));
+    cube.root.addEventListener('pointercancel', event => end(event, true));
+    cube.root.addEventListener('lostpointercapture', event => end(event, true));
+  }
+}

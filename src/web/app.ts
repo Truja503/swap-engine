@@ -5,14 +5,14 @@ import { playOpening } from './opening.js';
 import { mountQuote } from './quote.js';
 import { get, integer, text } from './ui.js';
 
-mountQuote();
+const setQuoteVisible = mountQuote();
 void fonts;
 const environment = api.health().then(health => {
   const mode = health.mode === 'simulation' ? 'Simulation' : 'Regtest read-only';
   get('mode').lastChild!.textContent = ' ' + mode.toUpperCase();
   get('mode').dataset.mode = health.mode;
   text('environment-label', mode);
-  text('network', 'Bitcoin regtest');
+  text('network', 'Bitcoin · REGTEST');
   text('account-network', 'Bitcoin regtest');
   return health.mode;
 }).catch(() => {
@@ -71,6 +71,7 @@ function navigate(focus: boolean) {
   if (location.hash === '#main') return;
   const current = views.find(view => '#' + view.id === location.hash) ?? views[0]!;
   for (const view of views) view.hidden = current !== view;
+  setQuoteVisible(current.id === 'swap');
   for (const link of document.querySelectorAll('nav a')) {
     if (link.getAttribute('href') === '#' + current.id) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');

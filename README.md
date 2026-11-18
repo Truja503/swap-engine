@@ -58,12 +58,16 @@ chain data, create replacement wallets, overwrite LND configuration, or close ch
 npm ci
 npm run build
 npm test
-cp .env.example .env
-# Review paths locally; .env contains file paths, never copied credentials.
-# Node does not automatically load .env:
-node --env-file=.env --import tsx scripts/inspect.ts
-node --env-file=.env --import tsx src/main.ts
+cp deploy/regtest.env.example .env.regtest
+# Review paths locally; .env.regtest contains file paths, never copied credentials.
+# Node does not automatically load .env.regtest:
+node --env-file=.env.regtest --import tsx scripts/inspect.ts
+node --env-file=.env.regtest --import tsx src/main.ts
 ```
+
+For offline simulation with no node connectivity, copy
+`deploy/simulation.env.example` to `.env.simulation` and use
+`node --env-file=.env.simulation --import tsx src/main.ts` instead.
 
 The sample uses Bitcoin cookie authentication with the existing `lqwd-lab` wallet.
 LND must already have a **local HTTPS REST listener** (usually 8080), a matching
@@ -73,11 +77,15 @@ LND configuration. The example uses a read-only macaroon. For an optional Alice
 balance source, set `ALICE_LND_REST_URL`, `ALICE_LND_TLS_CERT_PATH`, and
 `ALICE_LND_MACAROON_PATH` together to use Alice's loopback HTTPS listener,
 certificate, and read-only macaroon.
+Node credentials stay on the VM and are never copied into the repository.
 
 The API binds only to `127.0.0.1:3000`. `ENABLE_LIVE_SWAPS=true` causes startup to
-fail, rather than bypassing the incomplete observer/recovery boundary. Health
-reports component mode; it does not claim the nodes are ready. For live preflight
-and exact next steps see [the VM runbook](docs/regtest-runbook.md).
+fail, rather than bypassing the incomplete observer/recovery boundary. The explicit
+`APP_MODE` selects `simulation` (default; no node connectivity, clearly labeled in
+health and startup output) or `regtest` (read-only deployment; loopback-only
+Core/LND clients and real preflight diagnostics). `mainnet` and other modes are
+rejected. Health reports component mode; it does not claim the nodes are ready. For
+live preflight and exact next steps see [the VM runbook](docs/regtest-runbook.md).
 
 ### Provision a local account
 
@@ -100,6 +108,37 @@ the same origin for the application and API requests.
 
 ## API documentation
 
+For the existing Ubuntu VM, see [regtest read-only deployment instructions](docs/ubuntu-deployment.md)
+and the uninstalled [systemd service template](deploy/swap-engine.service).
+`GET /v1/preflight` reports read-only node/wallet/channel diagnostics in `regtest`
+mode; it returns 503 while prerequisites are unresolved, and 503 with
+`DIAGNOSTICS_NOT_CONFIGURED` in offline `simulation` mode. UI, quote and component
+health endpoints remain available. Runtime clients deny all node mutations, even
+after sync. `POST /v1/swaps/reverse` remains 503 in both modes.
+
+### Local estimate interface
+
+Run `npm start` and open **http://127.0.0.1:3000/**. The responsive three-panel
+interface shows Lightning input, swap calculation, and Bitcoin on-chain output.
+It is regtest simulation only and calls `POST /v1/quotes`; it never creates a
+swap, payment invoice, address, or transaction. Quote generation does not require
+running Bitcoin/LND nodes. The server still binds only to loopback.
+
+The input is the HTLC principal in whole sats (10,000–1,000,000). Fees and the
+Lightning invoice total come from the API. Net received is `amountSats - claimFeeSats`;
+net sats lost is `invoiceSats - net received`. For 50,000 sats these are 49,500
+received and 1,250 lost. Funding reserve is not an additional client fee. Estimates
+clear on input changes and expiry; request errors require a fresh estimate.
+On-chain to Lightning is visibly **NOT IMPLEMENTED**. Live swaps remain disabled.
+No frontend build step or additional dependencies are required.
+
+Pure satoshi accounting helpers, implemented by Qwen and independently reviewed,
+are in `src/utils/satoshiMath.ts`. They validate monetary quote fields and invoice
+consistency, calculate net received and total user cost, and exclude the provider's
+funding reserve from that cost. They consume quote values without changing the
+API's fee policy or enabling execution. Tests cover both helper boundaries and
+actual quote endpoint responses.
+
 All amounts are integer satoshis; timestamps are Unix milliseconds. Requests use
 `Content-Type: application/json`, strict object schemas, and an 8 KiB body limit.
 Schemas are in `src/api/schemas.ts`. Responses never contain private keys or a
@@ -113,7 +152,8 @@ preimage. Quotes are estimates; they do not reserve liquidity.
 | `POST /v1/quotes` | Public | `{ "amountSats": 50000 }` | 201 with the quote below |
 | `POST /v1/swaps/reverse` | `USER` or `ADMIN` | `{ "quoteId": "UUID", "paymentHash": "64 lowercase hex", "claimPublicKey": "compressed hex key" }` and the `Idempotency-Key` header | 503 `LIVE_SWAPS_DISABLED_OBSERVER_AND_RECOVERY_NOT_VERIFIED` for a valid request |
 | `GET /v1/swaps/:id` | Disabled | UUID path | 404 until swap ownership is persisted |
-| `GET /v1/health` | Public | None | 200 with `{ "status": "components-only", "liveSwapsEnabled": false, "network": "regtest" }` |
+| `GET /v1/health` | Public | None | 200 with `{ "status": "components-only", "liveSwapsEnabled": false, "readOnly": true, "network": "regtest", "mode": "simulation" }` (or `"mode": "regtest"`) |
+| `GET /v1/preflight` | Public | None | 200 if read-only regtest prerequisites are met, or 503 |
 | `GET /v1/liquidity` | `ADMIN` | Session cookie | 200 with available `onchainSats` and `incomingSats` after reservations, or 503 if nodes are unavailable |
 | `GET /v1/operations/balances` | `ADMIN` | Session cookie | 200 with a read-only regtest snapshot of Core, provider LND, and optional Alice LND |
 | `/v1/admin/*` | `ADMIN` | Session cookie | 503 until an admin handler is available |

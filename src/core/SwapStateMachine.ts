@@ -13,7 +13,8 @@ const allowed: Record<SwapState, SwapState[]> = {
 export function transition(swap: Swap, next: SwapState, now = Date.now()): boolean {
   if (swap.state === next) return false;
   if (['FAILED', 'EXPIRED'].includes(next) && (swap.lockup || swap.pendingAction)) throw new Error('Cannot release a funded or uncertain swap');
-  if (terminal.has(swap.state) || (!allowed[swap.state].includes(next) && next !== 'MANUAL_REVIEW')) throw new Error(`Illegal transition ${swap.state} -> ${next}`);
+  const evidenceLost = ['COMPLETED', 'REFUNDED'].includes(swap.state) && next === 'MANUAL_REVIEW';
+  if ((terminal.has(swap.state) && !evidenceLost) || (!allowed[swap.state].includes(next) && next !== 'MANUAL_REVIEW')) throw new Error(`Illegal transition ${swap.state} -> ${next}`);
   swap.state = next; swap.revision++; swap.updatedAt = now; swap.history.push({ state: next, at: now });
   return true;
 }

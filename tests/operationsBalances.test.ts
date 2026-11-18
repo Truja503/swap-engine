@@ -182,7 +182,9 @@ test('GET /v1/operations/balances rejects anonymous and USER callers before invo
   }, new Date('2026-11-18T12:00:00.000Z'));
   let snapshots = 0;
   async function listen(operations?: () => Promise<typeof report>) {
-    const server = createApi(f.manager, async () => ({ onchainSats: 0, incomingSats: 0 }), { storePath }, operations);
+    const server = createApi(f.manager, async () => ({ onchainSats: 0, incomingSats: 0 }), undefined, 'regtest', {
+      auth: { storePath }, operations,
+    });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));

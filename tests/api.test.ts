@@ -18,7 +18,9 @@ test('HTTP health is public, ownerless swap lookups are hidden, and operational 
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
-    assert.equal((await (await fetch(`${url}/v1/health`)).json()).liveSwapsEnabled, false);
+    assert.deepEqual(await (await fetch(`${url}/v1/health`)).json(), {
+      status: 'components-only', liveSwapsEnabled: false, readOnly: true, network: 'regtest', mode: 'simulation',
+    });
     const hidden = await fetch(`${url}/v1/swaps/${f.swap.id}`);
     const missing = await fetch(`${url}/v1/swaps/${'0'.repeat(36)}`);
     assert.equal(hidden.status, 404);

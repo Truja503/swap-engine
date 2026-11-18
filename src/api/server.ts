@@ -5,6 +5,15 @@ import { Sessions, roleDenial, sessionResponse, type AuthOptions } from '../auth
 import type { OperationsBalances } from '../operations/Balances.js';
 import { QuoteRequest, QuoteResponse, ReverseRequest, HealthResponse, LiquidityResponse, OperationsBalancesResponse, ErrorResponse, LoginRequest, SessionResponse } from './schemas.js';
 import { ZodError } from 'zod';
+import { readFile } from 'node:fs/promises';
+import type { preflight } from '../diagnostics/preflight.js';
+import type { ApplicationMode } from '../config.js';
+
+const webAssets = new Map([
+  ['/', ['index.html', 'text/html; charset=utf-8']],
+  ['/app.css', ['app.css', 'text/css; charset=utf-8']],
+  ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+]);
 
 async function body(req: IncomingMessage): Promise<unknown> {
   if (req.headers['content-type']?.split(';')[0] !== 'application/json') throw new SyntaxError('Expected application/json');
@@ -22,8 +31,12 @@ const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 export function createApi(
   manager: SwapManager,
   liquidity: () => Promise<Balances>,
-  authOptions: AuthOptions = {},
-  operations?: () => Promise<OperationsBalances>,
+  diagnostics?: () => ReturnType<typeof preflight>,
+  mode: ApplicationMode = 'simulation',
+  { auth: authOptions = {}, operations }: {
+    auth?: AuthOptions;
+    operations?: () => Promise<OperationsBalances>;
+  } = {},
 ) {
   const auth = new Sessions(authOptions);
   const server = createServer(async (req, res) => {
@@ -33,7 +46,18 @@ export function createApi(
     try {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
       if (req.method === 'OPTIONS') return noContent();
-      if (req.method === 'GET' && path === '/v1/health') return send(200, HealthResponse.parse({ status: 'components-only', liveSwapsEnabled: false, network: 'regtest' }));
+      const asset = webAssets.get(path);
+      if (req.method === 'GET' && asset) {
+        const content = await readFile(new URL(`../web/${asset[0]}`, import.meta.url));
+        res.writeHead(200, { 'content-type': asset[1]!, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" });
+        return res.end(content);
+      }
+      if (req.method === 'GET' && path === '/v1/health') return send(200, HealthResponse.parse({ status: 'components-only', liveSwapsEnabled: false, readOnly: true, network: 'regtest', mode }));
+      if (req.method === 'GET' && path === '/v1/preflight') {
+        if (!diagnostics) return send(503, ErrorResponse.parse({ error: 'DIAGNOSTICS_NOT_CONFIGURED' }));
+        const report = await diagnostics();
+        return send(report.prerequisitesSatisfied ? 200 : 503, report);
+      }
       if (req.method === 'POST' && path === '/v1/quotes') {
         const input = QuoteRequest.parse(await body(req));
         return send(201, QuoteResponse.parse(await manager.quote(input.amountSats)));

@@ -35,7 +35,7 @@ async function runtime(
 ) {
   const f = await setup();
   t.after(f.cleanup);
-  const server = createApi(f.manager, liquidity, { storePath, ...options });
+  const server = createApi(f.manager, liquidity, undefined, 'simulation', { auth: { storePath, ...options } });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));

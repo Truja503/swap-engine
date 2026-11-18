@@ -5,6 +5,9 @@ use std::{path::Path, process::ExitCode};
 #[derive(Parser)]
 #[command(about = "Bitcoin-only wallet operations for the isolated Arkade regtest lab")]
 struct Args {
+    /// Use the dedicated, one-shot E2E fixture wallets rather than operator wallets.
+    #[arg(long)]
+    e2e_fixture: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -53,7 +56,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let (action, wallet) = match Args::parse().command {
+    let args = Args::parse();
+    let (action, wallet) = match args.command {
         Command::InitWallets => (Action::Initialize, None),
         Command::Addresses { wallet } => (Action::Addresses, wallet),
         Command::Balance { wallet } => (Action::Balance, wallet),
@@ -79,6 +83,16 @@ async fn main() -> ExitCode {
     };
     let both = [WalletId::Alice, WalletId::Bob];
     let repo = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let fixture = repo.join("data/ark/e2e/fixture");
+    let repo = if args.e2e_fixture {
+        if !std::fs::symlink_metadata(&fixture).is_ok_and(|m| m.is_dir()) {
+            eprintln!("ArkWalletStorage: fixture is created by ark:test -- --e2e");
+            return ExitCode::FAILURE;
+        }
+        fixture.as_path()
+    } else {
+        repo
+    };
     let wallets = wallet
         .as_ref()
         .map_or(both.as_slice(), std::slice::from_ref);

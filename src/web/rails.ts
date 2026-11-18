@@ -5,7 +5,6 @@ export type Pair = Record<Side, Rail>;
 export type Turn = 1 | -1;
 
 export const railLabel: Record<Rail, string> = { onchain: 'On-chain', lightning: 'Lightning', liquid: 'Liquid' };
-export const railIcon: Record<Rail, string> = { onchain: '₿', lightning: 'ϟ', liquid: '◇' };
 export const defaultPair: Pair = { send: 'lightning', receive: 'onchain' };
 
 export function stepRail(rail: Rail, turn: Turn) {

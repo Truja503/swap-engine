@@ -33,7 +33,7 @@ Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suit
 
 ## Cube controls
 
-SEND holds the principal and source selector. SWAP holds the fee breakdown and confirmation action. RECEIVE holds the destination selector and estimated receipt. Change a network in its native selector, drag its cube vertically, or swipe its top control area on touch. On the rotation grip, Down moves to the next rail and Up moves to the previous rail. A grip tap moves forward.
+SEND holds the principal and source selector. SWAP holds the fee breakdown and confirmation action. RECEIVE holds the destination selector and estimated receipt. Change a network in its native selector, drag or scroll vertically over the cube, or swipe its top control area on touch. On the rotation arrow, Down moves to the next rail and Up moves to the previous rail. A tap moves forward.
 
 The rotation cycle is On-chain → Lightning → Liquid → On-chain. A direct selector change takes forward quarter turns through each intermediate rail. If both selected rails coincide, the opposite cube rotates forward to the next rail. Quotes wait for both outer cubes to settle. Existing quotes are discarded on rail and amount changes. Amount edits share a short debounce, and a stale response cannot update the face values.
 

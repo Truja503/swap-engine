@@ -1,9 +1,9 @@
-import { defaultPair, linkRail, railIcon, railLabel, rails, stepRail, type Pair, type Rail, type Side, type Turn } from './rails.js';
-import { get, text } from './ui.js';
+import { defaultPair, linkRail, railLabel, rails, stepRail, type Pair, type Rail, type Side, type Turn } from './rails.js';
+import { get } from './ui.js';
 
 const sides = ['send', 'receive'] as const;
 const dragThreshold = 34;
-const angle = (degrees: number) => `rotateX(${degrees}deg)`;
+const angle = (degrees: number, lift = 0) => `translateY(${lift}px) rotateX(${degrees}deg)`;
 const clamp = (n: number) => Math.max(-32, Math.min(32, n));
 
 function makeCube(side: Side, motion: MediaQueryList) {
@@ -11,8 +11,9 @@ function makeCube(side: Side, motion: MediaQueryList) {
   const selector = get<HTMLSelectElement>(side + '-network');
   const grip = get<HTMLButtonElement>(side + '-grip');
   const rotor = root.querySelector<HTMLElement>('.cube-rotor')!;
-  const top = root.querySelector('.plane-top .turn-label')!;
-  const bottom = root.querySelector('.plane-bottom .turn-label')!;
+  const top = root.querySelector<HTMLElement>('.plane-top .turn-label')!;
+  const bottom = root.querySelector<HTMLElement>('.plane-bottom .turn-label')!;
+  const railUse = root.querySelector<SVGUseElement>('.rail-icon use')!;
   let rail = defaultPair[side];
   let preview = 0;
   let running: Animation | undefined;
@@ -20,15 +21,25 @@ function makeCube(side: Side, motion: MediaQueryList) {
   function show(incoming: Rail, direction: Turn) {
     const face = direction === 1 ? bottom : top;
     const other = direction === 1 ? top : bottom;
-    face.textContent = railLabel[incoming].toUpperCase() + '  ' + railIcon[incoming];
+    if (face.dataset.rail !== incoming) {
+      const icon = railUse.parentElement!.cloneNode(true) as SVGSVGElement;
+      const use = icon.querySelector('use')!;
+      use.removeAttribute('id');
+      use.setAttribute('href', '#icon-' + incoming);
+      face.replaceChildren(icon, railLabel[incoming].toUpperCase());
+      face.dataset.rail = incoming;
+    }
     other.textContent = '';
+    delete other.dataset.rail;
   }
 
   function render() {
     selector.value = rail;
     root.dataset.rail = rail;
-    text(side + '-icon', railIcon[rail]);
+    railUse.setAttribute('href', '#icon-' + rail);
     top.textContent = bottom.textContent = '';
+    delete top.dataset.rail;
+    delete bottom.dataset.rail;
   }
   render();
 
@@ -46,8 +57,9 @@ function makeCube(side: Side, motion: MediaQueryList) {
     if (!motion.matches) {
       const animation = rotor.animate([
         { transform: angle(preview) },
+        ...(next ? [{ transform: angle(direction * 63, direction * 7), offset: .59 }] : []),
         { transform: angle(next ? direction * 90 : 0) },
-      ], { duration: next ? 275 - Math.abs(preview) * 2 : 155, easing: 'cubic-bezier(.28,.64,.26,1)', fill: 'forwards' });
+      ], { duration: next ? 375 - Math.abs(preview) * 2 : 200, easing: 'cubic-bezier(.24,.68,.28,1)', fill: 'forwards' });
       running = animation;
       await animation.finished.catch(() => {});
       if (running !== animation) return;
@@ -116,11 +128,29 @@ export function mountCubes(onChange: () => void, onSettle: (pair: Pair) => void)
     cube.grip.addEventListener('click', event => {
       if (event.detail === 0) choose(side, stepRail(target[side], 1), 1);
     });
+    let wheelDelta = 0;
+    let wheelLatched = false;
+    let wheelIdle: number | undefined;
+    cube.root.addEventListener('wheel', event => {
+      if (event.ctrlKey || event.shiftKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+          || (event.target as Element).closest('input, select')) return;
+      event.preventDefault();
+      window.clearTimeout(wheelIdle);
+      wheelIdle = window.setTimeout(() => { wheelLatched = false; wheelDelta = 0; }, 160);
+      if (wheelLatched) return;
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? cube.root.clientHeight : 1;
+      wheelDelta += event.deltaY * unit;
+      if (Math.abs(wheelDelta) < 36) return;
+      wheelLatched = true;
+      const direction = wheelDelta > 0 ? 1 : -1;
+      choose(side, stepRail(target[side], direction), direction);
+    }, { passive: false });
     let gesture: { id: number; start: number; grip: boolean } | undefined;
     cube.root.addEventListener('pointerdown', event => {
       const element = event.target as Element;
       if (!event.isPrimary || event.button !== 0 || element.closest('select, input, label, button:not(.rail-grip)')) return;
-      if (event.pointerType === 'touch' && !element.closest('.face-header')) return;
+      if (event.pointerType === 'touch' && !element.closest('.face-header, .rail-grip')) return;
       gesture = { id: event.pointerId, start: event.clientY, grip: !!element.closest('.rail-grip') };
       cube.root.setPointerCapture(event.pointerId);
     });

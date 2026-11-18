@@ -8,17 +8,12 @@ import { get, integer, text } from './ui.js';
 const setQuoteVisible = mountQuote();
 void fonts;
 const environment = api.health().then(health => {
-  const mode = health.mode === 'simulation' ? 'Simulation' : 'Regtest read-only';
-  get('mode').lastChild!.textContent = ' ' + mode.toUpperCase();
   get('mode').dataset.mode = health.mode;
-  text('environment-label', mode);
-  text('network', 'Bitcoin · REGTEST');
+  get('network').title = 'Bitcoin regtest';
   text('account-network', 'Bitcoin regtest');
   return health.mode;
 }).catch(() => {
-  get('mode').lastChild!.textContent = ' BACKEND UNAVAILABLE';
-  text('environment-label', 'Backend unavailable');
-  text('network', 'Unverified');
+  get('network').title = 'Regtest backend unavailable';
   return undefined;
 });
 
@@ -71,6 +66,7 @@ function navigate(focus: boolean) {
   if (location.hash === '#main') return;
   const current = views.find(view => '#' + view.id === location.hash) ?? views[0]!;
   for (const view of views) view.hidden = current !== view;
+  document.querySelector<HTMLElement>('.footer-squares')!.dataset.viewActive = current.id === 'track' ? 'account' : current.id;
   setQuoteVisible(current.id === 'swap');
   for (const link of document.querySelectorAll('nav a')) {
     if (link.getAttribute('href') === '#' + current.id) link.setAttribute('aria-current', 'page');

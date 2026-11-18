@@ -52,7 +52,10 @@ test('three faces quote a real route and preserve keyboard, account and responsi
   await page.goto(base);
   assert.equal(await page.locator('#opening-overlay').isVisible(), false);
   await page.waitForFunction(() => document.fonts.size >= 2);
-  await page.getByText('Bitcoin \u00b7 REGTEST', { exact: true }).waitFor();
+  await page.getByText('REGTEST', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.getElementById('mode')?.dataset.mode === 'simulation');
+  assert.equal(await page.locator('header.top').innerText(), 'SWAP\nACCOUNT\nOPERATIONS');
+  assert.equal(await page.locator('.footer-squares i').count(), 3);
   await page.getByText('49,500', { exact: true }).waitFor();
   assert.deepEqual(quoteRequests, [50_000]);
   assert.equal(await page.locator('#quote-form .cube-unit').count(), 3);
@@ -129,6 +132,7 @@ test('three faces quote a real route and preserve keyboard, account and responsi
 
   await audit(page);
   await page.getByRole('link', { name: 'Account', exact: true }).click();
+  assert.equal(await page.locator('.footer-squares').getAttribute('data-view-active'), 'account');
   assert.equal(await page.getByRole('button', { name: 'Sign in' }).isEnabled(), true);
   assert.equal(await page.locator('#account-dashboard').isVisible(), false);
   assert.equal(await page.locator(':focus').getAttribute('id'), 'account-title');
@@ -180,7 +184,7 @@ test('regtest page renders a real preflight 503 report with offline test ports',
   await page.route('**/v1/auth/session', route => route.fulfill({ json: session('ADMIN') }));
   await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#operations`);
   await page.getByText('Regtest setup requires attention.').waitFor();
-  assert.equal(await page.locator('#mode').textContent(), ' REGTEST READ-ONLY');
+  assert.equal(await page.locator('#mode').getAttribute('data-mode'), 'regtest');
   assert.equal(await page.locator('#core').textContent(), 'Unavailable');
   assert.equal(await page.locator('#height').textContent(), '—');
   assert.equal(await page.locator('#lnd').textContent(), 'Unavailable');
@@ -383,6 +387,16 @@ test('actual mouse and touch gestures rotate in both directions and linked anima
   assert.equal(await page.getByRole('button', { name: 'SWAP', exact: true }).isDisabled(), true);
   assert.equal(await page.locator('#received-preview').textContent(), '\u2014');
   assert.equal(observations.length, 2);
+  const receiveGrip = page.getByRole('button', { name: 'Rotate receive cube' });
+  await receiveGrip.hover();
+  await page.mouse.wheel(0, 80);
+  await page.mouse.wheel(0, 80);
+  await waitForRails(page, 'lightning', 'onchain');
+  await page.getByText('49,500', { exact: true }).waitFor();
+  await receiveGrip.hover();
+  await page.mouse.wheel(0, -80);
+  await waitForRails(page, 'lightning', 'liquid');
+  assert.equal(observations.length, 3);
   const video = page.video();
   await desktop.close();
   if (video) {

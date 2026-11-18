@@ -6,7 +6,7 @@ use ark_client::{
     BoltzReferralId, Client, InMemorySwapStorage, OfflineClient, OfflineClientConfig,
 };
 use ark_core::server::Info;
-use bitcoin::Network;
+use bitcoin::{Network, OutPoint};
 use blockchain::{RegtestBlockchain, ESPLORA};
 use serde_json::{json, Value};
 use std::{net::Ipv4Addr, path::Path, sync::Arc, time::Duration};
@@ -31,6 +31,8 @@ pub enum LabError {
     WalletBusy,
     #[error("ArkSdkOperationFailed: {0}")]
     Sdk(&'static str),
+    #[error("ArkSubmissionUncertain: reconcile the original input; do not repeat funding or submit a replacement")]
+    SubmissionUncertain,
 }
 
 type Result<T> = std::result::Result<T, LabError>;
@@ -58,6 +60,7 @@ pub enum Action {
     Balance,
     ListVtxos,
     Restore,
+    Board(OutPoint),
 }
 
 fn regtest(info: &Info) -> Result<()> {
@@ -93,7 +96,8 @@ async fn connect(store: &WalletStore, create: bool) -> Result<SdkClient> {
         // No swap commands; do not inherit an upstream mainnet default.
         boltz_url: String::new(),
         boltz_referral_id: BoltzReferralId::Disabled,
-        timeout: TIMEOUT,
+        // Round events can be more than one session tick apart.
+        timeout: Duration::from_secs(30),
         server_info_ttl: Duration::MAX,
         delegator_pk: None,
         historical_delegator_pks: vec![],
@@ -234,6 +238,14 @@ pub async fn run(repo: &Path, action: Action, wallets: &[WalletId]) -> Result<Va
             Action::Initialize | Action::Addresses => addresses(&client).await?,
             Action::Balance => balance(&client).await?,
             Action::ListVtxos => vtxos(&client).await?,
+            Action::Board(input) => {
+                let mut rng = bitcoin::secp256k1::rand::thread_rng();
+                let commitment = client
+                    .settle_vtxos(&mut rng, &[], &[input])
+                    .await
+                    .map_err(|_| LabError::SubmissionUncertain)?;
+                json!({"input": input.to_string(), "commitment_txid": commitment})
+            }
             Action::Restore => {
                 let report = client
                     .restore_contracts(ark_client::DEFAULT_GAP_LIMIT)

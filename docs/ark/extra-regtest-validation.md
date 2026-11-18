@@ -30,3 +30,16 @@ Código base probado: `9df9f6f08eb78e6cd6a48c7a349fdf8806fd890d`, rama `ark-regt
 - **Offboarding cooperativo (`offboard.json`)**: compromiso `abebe89ae8244bff5b7c5968ff19246370e9050ebcc3fbdd1e6e59dd58f95449` (altura 121, fee cadena 241 sats); salida `:2` de `30,000` sats a `bcrt1p26xsajjhlef4wvua7x5372ut8y06s90gcdynyjnjuwparh6ta56smxeexq`, cambio Ark `45,000` sats, `user_fee_sats: 0`.
 - **Renovación de VTXO expirado (`renewal.json`)**: rechazo de VTXO vencido, compromiso de renovación `3d337a13f8bf79482458195358877a45390d26d52e87e3d579e579d05e55bd4c` (altura 122, fee cadena 198 sats); nuevo VTXO `71a574dd21b3f208b1f9f445341a0da81163715cc7b4857991f122340d80ffc6:0` de `125,000` sats.
 - **No probado en vivo**: `unilateral_exit` (`SKIPPED`), `live_mutation_timeout` (`SKIPPED`, cubierto sólo de forma sintética en pruebas unitarias), Docker Engine en runner Ubuntu de GitHub Actions y pruebas de fuzzing/estrés concurrente.
+
+## 3. Validación offline posterior al hardening de seguridad (#48–#64)
+
+Tras aplicar los fixes de revisión en `ark/`, `scripts/ark/`, `deploy/ark/` y `.github/workflows/ark-lab-e2e.yml` (commits `ark(pr-48)` a `ark(pr-64)`), se re-verificó la suite offline sin servicios vivos:
+
+| Comando exacto | Estado | Resultado observado |
+| --- | --- | --- |
+| `cargo fmt --manifest-path ark/Cargo.toml --all -- --check` | `PASS` (exit 0) | Sin diferencias de formato. |
+| `cargo clippy --manifest-path ark/Cargo.toml --locked --all-targets --all-features -- -D warnings` | `PASS` (exit 0) | Sin advertencias en todos los targets/features. |
+| `npm run ark:test -- --unit-only` | `PASS` (exit 0) | **Bash (`test-bootstrap-funding.sh`)**: `PASS` (incluye regresión de balance `"0.0"` y saldo negativo). **Unitarias `src/lib.rs`**: `9 passed, 0 failed` (añade traversal/missing contracts, `bounded_submission` timeout, cross-check `ArkAddress.server()`, y rechazo de cambio sub-dust en offboarding). **`src/main.rs`**: `1 passed, 0 failed` (`fixture_root_rejects_symlinked_ancestors`). **`adapter_contract`**: `5 passed, 0 failed` (añade rechazo de importes cero y direcciones no regtest en `Quote::validate_submission`). **`adapter_arkd_read`**: `1 ignored` (**`SKIP`** offline). |
+| `npm run secrets:check` | `PASS` (exit 0) | Escaneo del índice y blobs históricos sin hallazgos (`findings: 0`). |
+
+*Nota:* la ejecución E2E en vivo de la sección 2 corresponde al commit `9df9f6f`; la re-validación en vivo contra el stack tras los commits de hardening queda pendiente para la corrida opt-in.

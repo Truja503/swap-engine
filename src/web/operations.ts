@@ -1,14 +1,22 @@
 import { api, type OperationsBalances } from './api.js';
 import { get, sats, text } from './ui.js';
 
-const nodes = ['core', 'provider', 'alice'] as const;
+const onchain = ['core', 'alice'] as const;
 const maxFreshAge = 60_000;
 const date = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
-const format = (value: number | null | undefined) => value == null ? 'Unavailable' : sats(value);
+const format = (value: number | bigint | null | undefined) => value == null ? 'Unavailable' : sats(value);
+
+function renderPile(id: string, fill: number | null, loading: boolean, showRemote = false) {
+  const pile = get(id);
+  pile.dataset.state = loading ? 'loading' : fill === null ? 'unavailable' : 'known';
+  pile.toggleAttribute('data-capacity', showRemote);
+  if (fill === null) pile.style.removeProperty('--wallet-fill');
+  else pile.style.setProperty('--wallet-fill', fill + '%');
+}
 
 export function mountOperationsBalances() {
   const refresh = get<HTMLButtonElement>('balance-refresh');
-  const chart = get('onchain-balances');
+  const chart = get('balance-piles');
   const snapshotTime = get<HTMLTimeElement>('balance-time');
   let active = false;
   let pending: AbortController | undefined;
@@ -28,20 +36,23 @@ export function mountOperationsBalances() {
   function render(snapshot?: OperationsBalances, loading = false) {
     window.clearTimeout(staleTimer);
     delete chart.dataset.stale;
-    const maxConfirmed = Math.max(0, ...nodes.map(node => snapshot?.[node]?.confirmedSats ?? 0));
-    for (const node of nodes) {
+    const maxConfirmed = Math.max(0, ...onchain.map(node => snapshot?.[node]?.confirmedSats ?? 0));
+    for (const node of onchain) {
       const wallet = snapshot?.[node];
       const confirmed = wallet?.confirmedSats;
-      const pile = get(node + '-pile');
-      pile.dataset.state = loading ? 'loading' : confirmed == null ? 'unavailable' : 'known';
-      if (confirmed == null || maxConfirmed === 0) pile.style.removeProperty('--wallet-fill');
-      else pile.style.setProperty('--wallet-fill', (confirmed / maxConfirmed * 100) + '%');
-      text(node + '-confirmed', format(wallet?.confirmedSats));
+      renderPile(node + '-pile', confirmed == null ? null : maxConfirmed > 0 ? 100 * (confirmed / maxConfirmed) : 0, loading);
+      text(node + '-confirmed', format(confirmed));
       text(node + '-unconfirmed', format(wallet?.unconfirmedSats));
     }
     for (const node of ['provider', 'alice'] as const) {
-      text(node + '-local', format(snapshot?.[node]?.localSats));
-      text(node + '-remote', format(snapshot?.[node]?.remoteSats));
+      const local = snapshot?.[node]?.localSats;
+      const remote = snapshot?.[node]?.remoteSats;
+      const capacity = local == null || remote == null ? null : BigInt(local) + BigInt(remote);
+      const fill = capacity === null ? null : capacity === 0n ? 0 : 100 * ((local ?? 0) / Number(capacity));
+      renderPile(node + '-lightning-pile', fill, loading, capacity !== null && capacity > 0n);
+      text(node + '-local', format(local));
+      text(node + '-remote', format(remote));
+      text(node + '-capacity', format(capacity));
     }
     snapshotTime.hidden = !snapshot;
     snapshotTime.dateTime = snapshot?.capturedAt ?? '';

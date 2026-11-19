@@ -1,4 +1,4 @@
-import { createApi } from './server.js';
+import { createOperatorApi as createApi } from './operatorServer.js';
 import type { OwnedReverseApi } from './ownedReverse.js';
 import type { Store } from '../persistence/Store.js';
 import { SwapManager } from '../core/SwapManager.js';

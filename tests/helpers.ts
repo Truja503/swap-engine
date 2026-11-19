@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as btc from 'bitcoinjs-lib';
@@ -9,6 +10,27 @@ import { Store } from '../src/persistence/Store.js';
 import { SwapManager } from '../src/core/SwapManager.js';
 import type { Invoice } from '../src/lightning/LndClient.js';
 import type { SwapPorts } from '../src/core/SwapCoordinator.js';
+import { provisionAccount } from '../scripts/provision-auth.js';
+import { SessionResponse } from '../src/api/schemas.js';
+
+export async function testAccount(directory: string, role: 'USER' | 'ADMIN') {
+  const storePath = join(directory, 'test-auth.json');
+  const username = 'test-operator';
+  const password = randomBytes(24).toString('base64url');
+  await provisionAccount(storePath, username, role, password);
+  return {
+    storePath, username, password,
+    async headers(origin: string) {
+      const response = await fetch(`${origin}/v1/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json', origin },
+        body: JSON.stringify({ username, password }),
+      });
+      assert.equal(response.status, 200);
+      const { csrfToken } = SessionResponse.parse(await response.json());
+      return { origin, cookie: response.headers.get('set-cookie')!.split(';')[0]!, 'x-csrf-token': csrfToken };
+    },
+  };
+}
 
 export const keys = ECPairFactory(ecc);
 export function routingFixture(channelPoint = 'ef'.repeat(32) + ':0') {

@@ -11,24 +11,20 @@ Origin and `x-csrf-token`. Ownership is `session.account.id`, never a username,
 browser body, forwarded identity header or operator bearer token. USER and ADMIN
 can access only their own explicitly bound swaps. This adds no login route.
 
-```ts
-// In the existing auth server, immediately after creating its existing `auth`:
-const controlled = createOwnedReverseGateway(auth);
-// At the beginning of that server's request handler, before generic swap/quote routes:
-if (await controlled.handle(req, res)) return;
-// After listening, start the reviewed operator loader IN THIS PROCESS:
-const runtime = runOperatorCLI(reviewedArgs, controlled.operatorIO);
-// On shutdown, stop admission/client observation and await all durable journaling:
-await controlled.close();
-await runtime;
-```
+The mount is implemented in `src/api/server.ts`, which creates one `Sessions`
+instance and passes it to `createOwnedReverseGateway`. `src/main.ts` passes that
+same gateway's `operatorIO` into the native loader. Login, logout, Operations,
+role checks, CSP and the frontend from main `d5e88ef` are preserved. Frontend,
+auth implementation, Operations and the dependency lockfile are byte-identical
+to that main revision.
 
-The gateway starts closed and keeps all swap routes behind the existing session.
-The native loader accepts only checked POSIX run files, restores custody before
-authorizing execution, and retains its store lock and vaults until the gateway
-closes. The default command-line entrypoint refuses serve modes without the
-existing in-process session integration. Do not start a second Sessions instance
-or forward a browser session to a separately initialized login service.
+Default startup mounts a closed availability handler. Only explicit native
+`--controlled-reverse` serve arguments in APP_MODE=regtest can install a run;
+simulation rejects installation. No HTTP request can start the loader or supply
+credentials. Shutdown first closes admission, stops local client observation,
+waits for operation journals and the loader, then releases both store locks and
+vault custody. The old private operator capability remains in `operatorServer`
+and is never mounted by the public application's server.
 
 `ui-access.json` (protected regular file, checked SHA256) contains only:
 `{"ownerId":"EXISTING_ACCOUNT_UUID","origin":"EXACT_APP_ORIGIN","port":3000}`.
@@ -48,6 +44,10 @@ lifecycle helper still binds only 127.0.0.1.
 --serve-status-only --run-dir ABS --spec-sha256 SHA --ui-config-sha256 SHA
 ```
 
+The integrated app supplies its session instance automatically: use
+`npm start -- --controlled-reverse` followed by one of those argument forms.
+See `integrated-owned-reverse.md` for the exact startup environment and validation.
+
 The first mode checks existing exact JIT authorization and custody restore, then
 waits for the authenticated owner's request; it needs the existing stdin vault
 passphrase. Status-only needs no passphrase or action credentials and cannot
@@ -66,7 +66,7 @@ and reconciliation; never invent a new key to repeat execution.
   executionAvailable:boolean, recoveryAvailable:boolean, preparedSwapIds:string[]}`.
   Enable the controlled button only when `executionAvailable` is true and the
   selected swap has `allowedActions:['EXECUTE']`. Missing endpoint/401/503 means
-  unavailable. Gateway absent in this branch returns 503/configured false.
+  unavailable. Default integrated startup returns 200/configured false after authentication.
 - `GET /v1/swaps`: `{network:'regtest',swaps:[ownedStatus]}`.
 - `GET /v1/swaps/:id`: owned status; foreign and absent IDs both 404.
 - `GET /v1/swaps/:id/revision`: `{id,revision}`.
@@ -114,15 +114,17 @@ block another execution forever, including after restart and different keys.
 Read-only reconciliation can report `MANUAL_REVIEW`; it does not promise automatic
 financial recovery or authorize resuming an uncertain action.
 
-Deploying/mounting into the existing auth server is still an explicit integration
-step; this task does not merge, push or deploy. An existing verified completed run
+The application mount is complete in this local branch; deployment remains
+unperformed and requires review. No remote branch was modified. An existing verified completed run
 can be assigned to its account through status-only mode. A fresh execution needs a
 new reviewed prepared run, exact owner/destination binding, unexpired JIT authority
 and passing runtime/custody checks. The previously spent input and completed invoice
 are evidence, not reusable authorization. No unapproved HTTP quote/invoice creation
 or unrestricted reverse execution is exposed.
 
-## Validation evidence
+## Validation evidence (API checkpoint)
+
+Current integrated-main validation is recorded in `integrated-owned-reverse.md`.
 
 Windows `npm run build` passed; the focused HTTP tests passed. Full Windows run hit
 the existing EPERM atomic rename limitation in `reverseSafety.test.ts`; persistence

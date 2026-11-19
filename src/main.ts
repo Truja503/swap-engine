@@ -1,24 +1,76 @@
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createApi } from './api/server.js';
 import { ReadOnlyBitcoinClient, ReadOnlyLndClient } from './diagnostics/ReadOnlyClients.js';
 import { preflight } from './diagnostics/preflight.js';
+import type { Balances } from './liquidity/LiquidityManager.js';
+import { collectOperationsBalances, type OperationsBalances } from './operations/Balances.js';
 import { Store } from './persistence/Store.js';
 import { SwapManager } from './core/SwapManager.js';
-import { config } from './config.js';
-import { recoverInterruptedReverseRuns, configuredReverseRecovery } from './api/reverseRecovery.js';
+import { config, type ApplicationMode } from './config.js';
+import { recoverInterruptedReverseRuns } from './api/reverseRecovery.js';
+import { parseOperatorCommand, runOperatorCLI } from '../scripts/run-controlled-reverse.js';
 
-const c = config();
-const store = await Store.open(c.directory);
-await recoverInterruptedReverseRuns(store);
-const bitcoin = new ReadOnlyBitcoinClient(c.bitcoinUrl, c.cookie, c.wallet);
-const lnd = new ReadOnlyLndClient(c.lndUrl, c.cert, c.macaroon);
-const server = createApi(new SwapManager(store), async () => {
-  await Promise.all([bitcoin.assertRegtest(), lnd.assertRegtest()]);
-  const [onchainSats, incomingSats] = await Promise.all([bitcoin.liquidity(), lnd.incomingLiquidity()]);
-  return { onchainSats, incomingSats };
-}, () => preflight(bitcoin, lnd, c.wallet), configuredReverseRecovery(store, c));
-server.listen(c.port, '127.0.0.1', () => console.log(JSON.stringify({ event: 'api_listening', host: '127.0.0.1', port: c.port, mode: 'simulation-read-only', liveSwapsEnabled: false })));
-let closing = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
-  if (closing) return; closing = true;
-  server.close(() => { void store.close().then(() => process.exit(0)); });
-});
+/** Only native reviewed serve modes can be installed; no action or credential comes from HTTP. */
+export function controlledStartupArguments(args: string[], mode: ApplicationMode): string[] | undefined {
+  if (!args.length) return undefined;
+  if (mode !== 'regtest' || args[0] !== '--controlled-reverse') throw new Error('CONTROLLED_STARTUP_REJECTED');
+  const operatorArgs = args.slice(1); const command = parseOperatorCommand(operatorArgs);
+  if (command.mode !== 'serve' && command.mode !== 'serve-status') throw new Error('CONTROLLED_STARTUP_REJECTED');
+  return operatorArgs;
+}
+
+type Dependencies = {
+  operator?: typeof runOperatorCLI;
+  port?: number;
+  reads?: { liquidity: () => Promise<Balances>; diagnostics?: () => ReturnType<typeof preflight>;
+    operations?: () => Promise<OperationsBalances> };
+};
+
+/** Real app entrypoint, also exercised offline with mock node/operator adapters. */
+export async function startApplication(env: NodeJS.ProcessEnv = process.env, args: string[] = [], dependencies: Dependencies = {}) {
+  const c = config(env); const operatorArgs = controlledStartupArguments(args, c.mode);
+  let liquidity: () => Promise<Balances>; let diagnostics: (() => ReturnType<typeof preflight>) | undefined;
+  let operations: (() => Promise<OperationsBalances>) | undefined;
+  if (dependencies.reads) ({ liquidity, diagnostics, operations } = dependencies.reads);
+  else if (c.mode === 'regtest') {
+    const bitcoin = new ReadOnlyBitcoinClient(c.bitcoinUrl, c.cookie, c.wallet);
+    const lnd = new ReadOnlyLndClient(c.lndUrl, c.cert, c.macaroon);
+    const alice = c.aliceLnd ? new ReadOnlyLndClient(c.aliceLnd.url, c.aliceLnd.cert, c.aliceLnd.macaroon) : null;
+    liquidity = async () => {
+      await Promise.all([bitcoin.assertRegtest(), lnd.assertRegtest()]);
+      const [onchainSats, incomingSats] = await Promise.all([bitcoin.liquidity(), lnd.incomingLiquidity()]);
+      return { onchainSats, incomingSats };
+    };
+    diagnostics = () => preflight(bitcoin, lnd, c.wallet, c.mode);
+    operations = () => collectOperationsBalances({ bitcoin, provider: lnd, alice });
+  } else liquidity = async () => { throw new Error('SIMULATION_MODE_HAS_NO_NODE_CONNECTIVITY'); };
+  const store = await Store.open(c.directory);
+  try {
+    await recoverInterruptedReverseRuns(store);
+    const server = createApi(new SwapManager(store), liquidity, diagnostics, c.mode,
+      { operations, auth: { storePath: env.AUTH_STORE_PATH, origin: env.AUTH_ORIGIN } });
+    await new Promise<void>((ready, reject) => { server.once('error', reject); server.listen(dependencies.port ?? c.port, '127.0.0.1', () => { server.off('error', reject); ready(); }); });
+    // Failed readiness leaves the app usable with controlled execution closed; never retry.
+    const runtime = operatorArgs ? (dependencies.operator ?? runOperatorCLI)(operatorArgs, server.controlled.operatorIO) : undefined;
+    void runtime?.catch(() => { console.error('CONTROLLED_RUNTIME_STOPPED: preserve intents; reconcile without retry'); });
+    let shutdown: Promise<void> | undefined;
+    return { server, store, runtime, mode: c.mode,
+      close(): Promise<void> {
+        return shutdown ??= (async () => {
+          const stopped = new Promise<void>(done => server.close(() => done()));
+          await server.controlled.close(); await runtime?.catch(() => {}); await stopped; await store.close();
+        })();
+      } };
+  } catch (error) { await store.close(); throw error; }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  void startApplication(process.env, process.argv.slice(2)).then(app => {
+    const address = app.server.address();
+    console.log(JSON.stringify({ event: 'api_listening', host: '127.0.0.1', port: address && typeof address === 'object' ? address.port : null, mode: app.mode, readOnly: true, liveSwapsEnabled: false }));
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
+      void app.close().catch(() => { console.error('APPLICATION_SHUTDOWN_UNCERTAIN'); process.exitCode = 1; });
+    });
+  }).catch(() => { console.error('APPLICATION_STARTUP_REJECTED'); process.exitCode = 1; });
+}

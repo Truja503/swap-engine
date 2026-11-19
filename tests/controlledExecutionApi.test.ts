@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { setup } from './helpers.js';
-import { createApi } from '../src/api/server.js';
+import { createOperatorApi as createApi } from '../src/api/operatorServer.js';
 
 test('controlled HTTP execution is unavailable without explicit local installation', async () => {
   const f = await setup(); const server = createApi(f.manager, async () => ({ onchainSats: 0, incomingSats: 0 }));

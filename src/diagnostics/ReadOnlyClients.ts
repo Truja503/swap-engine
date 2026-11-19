@@ -2,10 +2,10 @@ import { BitcoinRpcClient } from '../bitcoin/BitcoinRpcClient.js';
 import { LndClient } from '../lightning/LndClient.js';
 
 const bitcoinReads = new Set(['getblockchaininfo', 'getnetworkinfo', 'getindexinfo', 'getzmqnotifications',
-  'listwallets', 'listwalletdir', 'getwalletinfo', 'getaddressinfo', 'listunspent',
+  'listwallets', 'listwalletdir', 'getwalletinfo', 'getbalances', 'getaddressinfo', 'listunspent',
   'getblockhash', 'getblockheader', 'getblock', 'getrawtransaction', 'getrawmempool',
   'gettxout', 'listlockunspent', 'getmempoolinfo']);
-const lndReads = new Set(['/v1/state', '/v1/getinfo', '/v1/channels', '/v1/peers']);
+const lndReads = new Set(['/v1/state', '/v1/getinfo', '/v1/channels', '/v1/peers', '/v1/balance/blockchain']);
 
 /** Runtime policy is unconditional, including when nodes later report synced. */
 export class ReadOnlyBitcoinClient extends BitcoinRpcClient {

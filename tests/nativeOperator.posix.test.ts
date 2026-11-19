@@ -12,7 +12,7 @@ import { sha256 } from '../src/operator/OperatorFiles.js';
 import { verifyCustodyBackup } from '../src/operator/CustodyBackup.js';
 import { coreActionMethods, type ActionInspection } from '../src/operator/NativeActionCredentials.js';
 import { runOperatorCLI, type OperatorIO } from '../scripts/run-controlled-reverse.js';
-import { createApi } from '../src/api/server.js';
+import { createOperatorApi as createApi } from '../src/api/operatorServer.js';
 import { SwapManager } from '../src/core/SwapManager.js';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Store } from '../persistence/Store.js';
 import { SwapManager } from '../core/SwapManager.js';
-import { createApi } from './server.js';
+import { createOperatorApi as createApi } from './operatorServer.js';
 
 export type ControlledExecution = { swapId: string; expectedRevision: number; token: string;
   execute(): Promise<{ id: string; state: string; revision: number }> };

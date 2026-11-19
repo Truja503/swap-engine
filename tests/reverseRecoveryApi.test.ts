@@ -9,7 +9,7 @@ import { Store } from '../src/persistence/Store.js';
 import { SwapCoordinator } from '../src/core/SwapCoordinator.js';
 import { updateSwapRevision } from '../src/core/SwapStateMachine.js';
 import { createReverseRecovery, recoverInterruptedReverseRuns } from '../src/api/reverseRecovery.js';
-import { createApi } from '../src/api/server.js';
+import { createOperatorApi as createApi } from '../src/api/operatorServer.js';
 import type { ReversePaymentStatus } from '../src/core/SwapTypes.js';
 
 async function fixture(configured = true) {

@@ -5,12 +5,13 @@ import type { serveOwnedReverse } from './serveOwnedReverse.js';
 /** Mount this handler in the EXISTING authenticated app before legacy swap routes. The
  * operator loader runs in-process, keeping its store/custody lifetime open until close().
  * It neither creates a login nor trusts a cookie, bearer token or forwarded owner itself. */
-export function createOwnedReverseGateway<S extends { account: { id: string; role: string } }>(sessions: OwnerSessions<S>) {
+export function createOwnedReverseGateway<S extends { account: { id: string; role: string } }>(sessions: OwnerSessions<S>,
+  options: { enabled?: boolean; delegateWhenInactive?: boolean } = {}) {
   const authenticate = sessionOwnerAuthenticator(sessions);
   let current: OwnedReverseApi | undefined; let stopClient: (() => void) | undefined; let finish: (() => void) | undefined;
   let closing: Promise<void> | undefined;
   const serve: typeof serveOwnedReverse = async (_store, owned, _port, stop) => {
-    if (current || closing) throw new Error('Controlled runtime already mounted or closed');
+    if (options.enabled === false || current || closing) throw new Error('Controlled runtime disabled, already mounted or closed');
     current = owned; stopClient = stop;
     await new Promise<void>(resolve => { finish = resolve; });
     return { status: 'OWNED_REGTEST_API_STOPPED' };
@@ -20,6 +21,7 @@ export function createOwnedReverseGateway<S extends { account: { id: string; rol
     async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
       if (current) return current.handle(req, res);
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (options.delegateWhenInactive && path !== '/v1/reverse/availability') return false;
       if (path !== '/v1/reverse/availability' && path !== '/v1/swaps' && !path.startsWith('/v1/swaps/')) return false;
       const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
       try {

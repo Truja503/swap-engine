@@ -63,7 +63,7 @@ The HTTP route `GET /v1/preflight` reports the provider configuration only. It
 returns `200` only when its prerequisites are satisfied and `503` otherwise:
 
 ```bash
-node --env-file=.env.simulation --import tsx src/main.ts
+node --env-file=.env.regtest --import tsx src/main.ts
 curl -sS -w '\nHTTP %{http_code}\n' http://127.0.0.1:3000/v1/preflight
 curl -sS http://127.0.0.1:3000/v1/health
 ```

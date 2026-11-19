@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ApplicationMode } from '../config.js';
 
 interface Rpc { call<T>(method: string, params?: unknown[], wallet?: boolean): Promise<T> }
 interface Rest { call<T>(path: string): Promise<T> }
@@ -33,8 +34,14 @@ async function probe<T>(schema: z.ZodType<T>, read: () => Promise<unknown>) {
   }
 }
 
+export type PreflightMode = 'simulation-read-only' | 'regtest-read-only';
+
+export function preflightMode(mode: ApplicationMode): PreflightMode {
+  return mode === 'regtest' ? 'regtest-read-only' : 'simulation-read-only';
+}
+
 /** Connectivity and safety diagnostics only; never fixes node or wallet state. */
-export async function preflight(bitcoin: Rpc, lnd: Rest, wallet: string) {
+export async function preflight(bitcoin: Rpc, lnd: Rest, wallet: string, mode: ApplicationMode = 'simulation') {
   const [core, loaded, directory, lightning, channels, walletState, notifications] = await Promise.all([
     probe(chainSchema, () => bitcoin.call('getblockchaininfo')),
     probe(z.array(z.string()), () => bitcoin.call('listwallets')),
@@ -75,7 +82,7 @@ export async function preflight(bitcoin: Rpc, lnd: Rest, wallet: string) {
   else if (active === 0) blockers.push('NO_ACTIVE_CHANNELS');
   if (l?.num_peers === 0) blockers.push('NO_LND_PEERS');
   return {
-    mode: 'simulation-read-only' as const, network: 'regtest' as const,
+    mode: preflightMode(mode), network: 'regtest' as const,
     liveSwapsEnabled: false as const, signingEnabled: false as const,
     broadcastingEnabled: false as const, miningEnabled: false as const, paymentsEnabled: false as const,
     diagnosticsOk: [core, loaded, directory, lightning, channels, walletState, notifications].every(p => p.status === 'ok'),

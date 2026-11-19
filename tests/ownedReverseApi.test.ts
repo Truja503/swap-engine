@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { preparationFixture } from './preparationFixture.js';
 import { SwapManager } from '../src/core/SwapManager.js';
-import { createApi } from '../src/api/server.js';
+import { createOperatorApi as createApi } from '../src/api/operatorServer.js';
 import { createOwnedReverseApi, sessionOwnerAuthenticator } from '../src/api/ownedReverse.js';
 import { createOwnedReverseGateway } from '../src/api/ownedReverseGateway.js';
 

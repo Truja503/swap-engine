@@ -1,7 +1,7 @@
 import { api, type Session } from './api.js';
 import { get, text } from './ui.js';
 
-export function mountAuth(onAdminChange: (allowed: boolean) => void) {
+export function mountAuth(onSessionChange: (session: Session | null) => void) {
   const form = get<HTMLFormElement>('login-form');
   const username = get<HTMLInputElement>('username');
   const password = get<HTMLInputElement>('password');
@@ -34,7 +34,7 @@ export function mountAuth(onAdminChange: (allowed: boolean) => void) {
     text('account-role', next ? (admin ? 'Administrator' : 'User') : '');
     text('admin-status', next ? 'Administrator role required.' : 'Sign in with an administrator account.');
     if (recoverFocus) document.querySelector<HTMLElement>('[data-view]:not([hidden]) h1')?.focus();
-    onAdminChange(admin);
+    onSessionChange(next);
     if (next) {
       expiry = window.setTimeout(() => {
         if (session !== next) return;

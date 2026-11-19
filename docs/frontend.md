@@ -29,7 +29,7 @@ npm run test:web
 
 To use installed Edge from PowerShell, set `$env:WEB_TEST_BROWSER_CHANNEL = 'msedge'` before `npm run test:web`. The browser tests save screenshots in `dist/web-verification`. Set `$env:WEB_TEST_RECORD = '1'` to save a WebM of the full-screen opening, 3D entrance, manual drag and linked rotation. Browser recording requires Playwright's FFmpeg binary, which can be installed with `npx playwright install ffmpeg`.
 
-Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 170 tests with 2 skips, and 7 browser tests passed. Browser coverage includes Account error and retry states, the Operations balance contract, gestures, linked rotation, fast input, quote expiry, stale responses, axe scans, reduced motion and seven viewport sizes from 320 to 1440 pixels wide.
+Verified on Windows with Node.js 24 and Edge. The build succeeded, the Node suite passed 170 tests with 2 skips, and 8 browser tests passed. Browser coverage includes prepared swap review and idempotency, Account error and retry states, the Operations balance contract, gestures, quote expiry, stale responses, axe scans, reduced motion and responsive layouts.
 
 ## Cube controls
 
@@ -42,15 +42,41 @@ The rotation cycle is On-chain → Lightning → Liquid → On-chain. A direct s
 | Surface | Current behavior |
 | --- | --- |
 | Swap | `POST /v1/quotes` accepts integer `amountSats` from 10,000 to 1,000,000. Net receipt is principal minus estimated claim fee. Estimated user cost is invoice total minus net receipt. The provider funding reserve is omitted from user costs. Lightning routing fees are unknown. |
-| Rails | Lightning → On-chain is the only quote route. On-chain → Lightning and routes involving Liquid can be selected and show an unavailable state. Execution is disabled because the reverse POST returns 503. |
-| Status and history | The frontend leaves these unavailable until the backend can verify swap ownership. Contract data from public swap lookups is excluded. |
+| Rails | Lightning → On-chain is the only supported route. The generic quote is preview-only. A controlled reverse swap requires an authenticated, server-prepared swap and explicit approval. On-chain → Lightning and routes involving Liquid show an unavailable state. |
+| Status and history | The frontend reads prepared swaps from the authenticated owner API. Missing or closed gateways show unavailable. |
 | Account | Same-origin sign-in, session verification and logout. The form accepts credentials even if the session endpoint is unavailable. A missing login endpoint displays a retryable error. A verified session is required to open the account. The browser keeps the CSRF token in memory and uses it for logout. It expects the session expiry in epoch milliseconds. |
 | Operations | The UI requires a verified ADMIN session before revealing the admin view. On a regtest read-only backend it can read preflight, including structured 503 reports. The balance panel reads the authenticated endpoint below and shows unavailable data explicitly. |
 | Reporting | Admin transaction lists, actual and earned fees, HTLC counts, Alice's preflight status, and revenue remain unavailable. |
 
+### Reverse swap UI integration
+
+Lightning → On-chain on regtest uses the authenticated owner gateway when configured. The generic cube quote remains preview-only. The prepared review is separate and uses server-bound terms.
+
+| UI step | Backend input needed |
+| --- | --- |
+| Availability | An explicit regtest execution capability and a verified session authorized for the route. Missing, disabled, or unknown capability keeps Start swap disabled. |
+| Review | The server's current quote, its expiry, the exact wallet-approved destination, principal, service fee, estimated claim fee, invoice total, and expected on-chain receipt. Keep unknown routing fees visible. Any change to the route, amount, quote, or destination invalidates the review. |
+| Submit | A user-initiated confirmation using the authenticated endpoint, required CSRF token, and one idempotency key per reviewed intent. If the result is uncertain, resolve it using the backend's supported lookup or same-key replay contract before issuing another intent. |
+| Track | A server-owned swap ID and an authenticated status endpoint with enforced ownership. Present the returned invoice, funding, confirmation, claim, and settlement evidence independently. Show completion only when the backend confirms the terminal state. |
+| Recover | The backend's categorized failure, expiry, refund, or manual-review state and any approved next action. Refresh owned status before offering an action that can change state. |
+
+Integration needs exact schemas and routes for capability, destination and wallet ownership, quote expiry and fees, idempotent create or lookup, and status and recovery. The UI should use only the public data those contracts require. Forward swaps and Liquid remain unavailable.
+
+#### Prepared-swap contract
+
+The owned gateway lists server-prepared swaps with `GET /v1/swaps` and supplies the prepared quote and `claimDestination`. The controlled flow rejects the generic `POST /v1/quotes` with `USE_PREPARED_SWAP`. The frontend pauses editable quotes as soon as the authenticated capability reports that the controlled gateway is configured.
+
+- Confirmation maps to `POST /v1/swaps/reverse` with `{preparedSwapId, expectedRevision}` and an `Idempotency-Key` only after explicit confirmation and a fresh backend authorization and revision check. The prepared quote expiry is historical. The server creates and validates a fresh quote when executing. The browser displays the approval deadline and relies on the server for eligibility.
+- `GET /v1/swaps/:id` provides owned state, revision, and `allowedActions`. `202 RUNNING` stays pending and `202 RECONCILIATION_REQUIRED` opens status and recovery guidance. A revision conflict requires refreshing the prepared swap and reviewing changes. A successful operation response is followed by the owned status read.
+- `POST /v1/swaps/:id/reconcile` uses the current `expectedRevision` and its own idempotency key. Display the returned evidence or recovery recommendation. Recommendations such as `FUND`, `CLAIM`, or `SETTLE` do not authorize additional browser actions.
+
+The browser uses the existing HttpOnly session through same-origin requests and supplies the verified session's CSRF token for POSTs. It persists only the exact request and idempotency key, scoped to account and swap. A separate key is used for reconciliation. Browser verification intercepts mutations and does not execute real payments.
+
 ### Operations balances
 
 The frontend expects a same-origin `GET /v1/operations/balances` protected by server-side ADMIN authorization. A successful snapshot has `network: "regtest"` and `capturedAt` as an ISO 8601 UTC string. It includes `core`, `provider`, and `alice`. All three include `confirmedSats` and `unconfirmedSats`. The two LND entries also include `localSats` and `remoteSats` for Lightning channels. Amounts are nonnegative safe integers in sats or `null`. A whole node may be `null` if unavailable. Non-success or malformed responses clear the snapshot and display unavailable. The client does not derive balances from other endpoints.
+
+Wallet battery fills compare confirmed on-chain sats with the largest known confirmed balance in that snapshot. Unconfirmed sats and Lightning balances remain separate. A zero balance has an empty battery. Missing data uses a dashed battery. When a snapshot reaches one minute old, the panel marks it historical and keeps the original values and timestamp visible until refresh.
 
 The deployment baseline is `integration/reverse-swap-regtest` at `f9bac1a6cf34478109b680492008f39d00ab6e28`. Browser tests cover the baseline's missing auth routes and use intercepted responses for sign-in, role verification and logout. A separate same-origin test with the local `auth-rbac` implementation and a temporary account verified a rejected password, an ADMIN session, the HttpOnly and SameSite cookie properties, and CSRF-protected logout. The auth routes still need to land in the integration branch. The repo audit reports four inherited dependency advisories in bitcoinjs-lib, ecpair, valibot and Zod. Dependency remediation belongs to the backend integration work.
 

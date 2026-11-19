@@ -61,3 +61,5 @@ Pendiente de revisión: despliegue y configuración del run/owner aprobado; no s
 crearon facturas ni se pagó, firmó, transmitió o minó durante esta integración.
 `npm audit` del lockfile heredado registra cuatro avisos (bitcoinjs-lib, ecpair,
 valibot y zod); no se cambiaron dependencias ni criptografía como parte del montaje.
+Esos avisos se resolvieron posteriormente con las versiones compatibles del
+candidato documentado en `frontend-gateway-review.md`, cuyo audit es cero.

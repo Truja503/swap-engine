@@ -92,6 +92,11 @@ Al iniciar sesión como truja503, availability debe devolver
 controlledReverseConfigured=true, executionAvailable=false y preparedSwapIds con
 el swap anterior. List/status solo son del owner; cookie HttpOnly y CSRF existentes.
 La UI puede mostrar este run y sus evidencias; pagar sigue deliberadamente bloqueado.
+El coordinador confirmó independientemente por túnel, con sesión truja503: login,
+availability y GET swap 200; configured=true, executionAvailable=false,
+recoveryAvailable=true, el ID anterior, INVOICE_CREATED revisión 3,
+payment=NOT_STARTED y allowedActions vacío (msg_65b6c105412e). No se hizo revisión
+visual de la UI en vivo ni POST de ejecución. Helper y pruebas: commit `7ff30b8`.
 
 Para habilitar ejecución después: revisión fresca del mismo invoice OPEN y input/
 canal/altura/fees, backup restaurable, credenciales de acción limitadas, suministro

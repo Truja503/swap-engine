@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import type { preflight } from '../diagnostics/preflight.js';
 import type { ApplicationMode } from '../config.js';
 import { createOwnedReverseGateway } from './ownedReverseGateway.js';
+import { historicalSwaps, HistoricalSwapResponse } from './historicalSwaps.js';
 
 const webAssets = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -34,9 +35,10 @@ export function createApi(
   liquidity: () => Promise<Balances>,
   diagnostics?: () => ReturnType<typeof preflight>,
   mode: ApplicationMode = 'simulation',
-  { auth: authOptions = {}, operations }: {
+  { auth: authOptions = {}, operations, history = historicalSwaps }: {
     auth?: AuthOptions;
     operations?: () => Promise<OperationsBalances>;
+    history?: () => unknown | Promise<unknown>;
   } = {},
 ) {
   const auth = new Sessions(authOptions, mode);
@@ -97,6 +99,10 @@ export function createApi(
       if (path === '/v1/admin' || path.startsWith('/v1/admin/')) {
         const status = roleDenial(session, 'ADMIN');
         if (status) return deny(status);
+        if (req.method === 'GET' && path === '/v1/admin/swaps/historical') {
+          try { return send(200, HistoricalSwapResponse.parse(await history())); }
+          catch { return send(503, { error: 'HISTORICAL_EVIDENCE_UNAVAILABLE' }); }
+        }
         return send(503, { error: 'SERVICE_UNAVAILABLE' });
       }
       if (req.method === 'GET' && path === '/v1/operations/balances') {

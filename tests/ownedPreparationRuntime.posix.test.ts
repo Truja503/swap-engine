@@ -1,0 +1,146 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { readinessFixture } from './readinessFixture.js';
+import { provisionAccount } from '../scripts/provision-auth.js';
+import { readAccounts } from '../src/auth/store.js';
+import { createOwnedRuntimeFactory, ownedRuntimePolicySchema, type OwnedNativeIO } from '../src/operator/OwnedPreparationRuntime.js';
+import { recoveryPaymentsPath } from '../src/lightning/LndPayerRecovery.js';
+import type { Invoice } from '../src/lightning/LndClient.js';
+import { Store } from '../src/persistence/Store.js';
+import { sha256 } from '../src/operator/OperatorFiles.js';
+
+const linux = process.platform === 'linux';
+async function fixture() {
+  const x = await readinessFixture(); const directory = x.f.directory;
+  const runs = join(directory, 'runs'); const backups = join(directory, 'backups');
+  await mkdir(runs, { mode: 0o700 }); await mkdir(backups, { mode: 0o700 });
+  const password = join(directory, 'synthetic-password'); await writeFile(password, 'synthetic-owned-runtime-password', { mode: 0o600 });
+  const accounts = join(directory, 'accounts.json'); await provisionAccount(accounts, 'truja503', 'ADMIN', 'synthetic-owned-admin-password');
+  const owner = (await readAccounts(accounts))[0]!;
+  const policy = ownedRuntimePolicySchema.parse({ mode: 'regtest', ownerId: owner.id, ownerUsername: 'truja503', authStorePath: accounts,
+    origin: 'http://127.0.0.1:3101', port: 3101, runsDirectory: runs, backupsDirectory: backups, passwordPath: password,
+    providerNode: x.plan.providerNode, payerNode: x.plan.payerNode, routing: x.plan.routing, claimDestination: x.plan.claimDestination, refundDestination: x.plan.refundDestination,
+    credentialPaths: { bitcoinCookiePath: '/synthetic/cookie', providerCertPath: '/synthetic/provider.cert', providerReadMacaroonPath: '/synthetic/provider.read',
+      providerInvoiceMacaroonPath: '/synthetic/provider.invoices', payerCertPath: '/synthetic/payer.cert', payerReadMacaroonPath: '/synthetic/payer.read' },
+    actions: { coreMode: 'existing-regtest-cookie', bitcoinActionAuthPath: '/synthetic/cookie', providerSettleMacaroonPath: '/synthetic/provider.invoices', payerSendMacaroonPath: '/synthetic/payer.router' },
+    amountSats: 50000, invoiceSats: 50750, fundingFeeLimitSats: 1000, routingFeeLimitSats: 100, claimFeeSats: 500, maxBlocks: 2, maxInputSats: 1000000 });
+  let exists = false; let hash = ''; let creates = 0; let actions = 0; let inspections = 0; let clocks = 0; let lost = false; let ntp = true; let owns = true; let canceled = false;
+  const paymentRequest = 'lnbcrt' + 'c'.repeat(30);
+  const invoice = (): Invoice => ({ state: canceled ? 'CANCELED' : 'OPEN', r_hash: Buffer.from(hash, 'hex').toString('base64'), value: '50750', amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] });
+  const bitcoin = { ...x.bitcoin, confirmed: async () => { throw Error('No recovery chain evidence required by this test'); }, assertRegtest: async () => x.chain };
+  const provider = { ...x.provider, assertRegtest: async () => x.providerInfo, lookup: async (h: string) => { assert.equal(h, hash); if (!exists) throw Error('absent'); return invoice(); } };
+  const payer = { ...x.payer, assertRegtest: async () => x.payerInfo,
+    async call<T>(path: string): Promise<T> {
+      if (path === '/v2/wallet/addresses?account_name=default') return { account_with_addresses: [{ addresses: owns ? [{ address: policy.claimDestination, is_internal: false }] : [] }] } as T;
+      if (path === '/v1/payreq/' + paymentRequest) return { ...x.decoded, payment_hash: hash } as T;
+      return x.payer.call(path);
+    } };
+  const clients = { bitcoin, provider, payer,
+    invoices: { origin: policy.routing.providerOrigin, async lookup(h: string) { return exists && h === hash ? { status: 'PRESENT', invoice: invoice() } : { status: 'ABSENT' }; },
+      async create(request: { hash: string; sats: number }, guard: () => Promise<void>) {
+        creates++; assert.equal(request.sats, 50750); await guard(); hash = request.hash; exists = true;
+        const attempt = (await import('node:fs/promises')).readdir(runs); const entries = await attempt;
+        const db = JSON.parse(await readFile(join(runs, entries[0]!, 'store/state.json'), 'utf8'));
+        assert.equal(Object.values<{ invoiceAttempt: { wireAuthorized: boolean } }>(db.reversePreparations)[0]!.invoiceAttempt.wireAuthorized, true);
+        if (lost) throw Error('synthetic-lost-invoice-response'); return { payment_request: paymentRequest };
+      } },
+    recoveryPayer: { origin: policy.routing.payerOrigin, async call<T>(path: string): Promise<T> {
+      if (path === recoveryPaymentsPath) return { payments: [] } as T;
+      assert.equal(path, '/v1/getinfo'); return x.payerInfo as T;
+    } } };
+  const io: Partial<OwnedNativeIO> = { clients: () => clients as unknown as ReturnType<OwnedNativeIO['clients']>,
+    clock: async () => { clocks++; if (!ntp) throw Error('synthetic-unsynchronized-clock'); },
+    inspect: async () => { inspections++; return { core: { mode: 'existing-regtest-cookie', dedicatedUser: false, methods: [], authFingerprint: 'ab'.repeat(32) },
+      settle: { role: 'settle', permissions: ['invoices:read', 'invoices:write'], fingerprint: 'cd'.repeat(32) },
+      pay: { role: 'pay', permissions: ['offchain:read', 'offchain:write'], fingerprint: 'ef'.repeat(32) }, providerCertFingerprint: 'aa'.repeat(32), payerCertFingerprint: 'bb'.repeat(32) }; },
+    probe: async () => ({ regtestIdentity: true, unlistedReadDenied: false }),
+    actions: () => { actions++; throw Error('No financial assembly during prepare/restart'); },
+    executor: () => { actions++; throw Error('No execution during prepare/restart'); } };
+  const factory = await createOwnedRuntimeFactory(policy, { get: async () => undefined, verifyCsrf: () => false }, io);
+  const entry = { ownerId: owner.id, fingerprint: 'ab'.repeat(32), attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT' as const };
+  return { x, factory, entry, runs, policy, io, counts: () => ({ creates, actions, inspections, clocks }),
+    lose: () => { lost = true; }, cancel: () => { canceled = true; }, noClock: () => { ntp = false; }, foreignAddress: () => { owns = false; },
+    cleanup: async () => { await factory.close?.(); await x.f.cleanup(); } };
+}
+
+test('native self-service prepares/restores encrypted custody and one invoice, authorizes review without any payer/sign/broadcast/mining assembly', { skip: !linux }, async () => {
+  const x = await fixture(); try {
+    const runtime = await x.factory.prepare('ab'.repeat(32), x.entry); const view = runtime.api.list(x.entry.ownerId)[0]!;
+    assert.equal(view.state, 'INVOICE_CREATED'); assert.equal(view.payment.status, 'NOT_STARTED'); assert.ok(view.allowedActions.includes('EXECUTE'));
+    const deadline = view.execution.approvedUntil; await runtime.authorize('repeated-explicit-review');
+    assert.equal(runtime.api.list(x.entry.ownerId)[0]!.execution.approvedUntil, deadline); assert.equal(x.counts().creates, 1); assert.equal(x.counts().actions, 0);
+    await runtime.close(); const restored = await x.factory.restore('ab'.repeat(32), { ...x.entry, status: 'READY', swapId: runtime.swapId });
+    assert.ok(restored); assert.equal(restored.api.list(x.entry.ownerId)[0]!.allowedActions.includes('EXECUTE'), false); assert.equal(x.counts().creates, 1);
+    await restored.authorize('explicit-review-after-restart'); assert.ok(restored.api.list(x.entry.ownerId)[0]!.allowedActions.includes('EXECUTE'));
+    assert.equal(x.counts().actions, 0); await restored.close();
+  } finally { await x.cleanup(); }
+});
+
+test('operator preflight checks the real native role/identity assembly without generating custody or invoking invoice/payment capabilities', { skip: !linux }, async () => {
+  const x = await fixture(); try {
+    const result = await x.factory.preflight!() as { status: string; network: string; height: number };
+    assert.equal(result.status, 'REGTEST_PROFILE_CHECKED_NO_INVOICE_OR_PAYMENT'); assert.equal(result.network, 'regtest'); assert.equal(result.height, 100);
+    assert.deepEqual(await readdir(x.runs), []); assert.equal(x.counts().creates, 0); assert.equal(x.counts().actions, 0);
+    x.noClock(); await assert.rejects(x.factory.preflight!()); assert.equal(x.counts().creates, 0);
+  } finally { await x.cleanup(); }
+});
+
+test('native lost invoice acknowledgment is lookup-recovered without duplicate creation or automatic execution authority', { skip: !linux }, async () => {
+  const x = await fixture(); try {
+    x.lose(); await assert.rejects(x.factory.prepare('ab'.repeat(32), x.entry)); assert.equal(x.counts().creates, 1);
+    const runtime = await x.factory.restore('ab'.repeat(32), { ...x.entry, status: 'UNKNOWN' }); assert.ok(runtime);
+    assert.equal(runtime.api.list(x.entry.ownerId)[0]!.payment.status, 'NOT_STARTED');
+    assert.equal(runtime.api.list(x.entry.ownerId)[0]!.allowedActions.includes('EXECUTE'), false);
+    await assert.rejects(x.factory.prepare('ab'.repeat(32), x.entry)); assert.equal(x.counts().creates, 1); assert.equal(x.counts().actions, 0); await runtime.close();
+  } finally { await x.cleanup(); }
+});
+
+test('native untrusted clock, foreign Alice address, changed channel and insufficient directional liquidity reject before invoice creation', { skip: !linux }, async () => {
+  for (const stage of ['clock', 'address', 'channel', 'liquidity']) {
+    const x = await fixture(); try {
+      if (stage === 'clock') x.noClock(); if (stage === 'address') x.foreignAddress();
+      if (stage === 'channel') x.x.payerChannels.channels[0]!.chan_id = '999';
+      if (stage === 'liquidity') x.x.payerChannels.channels[0]!.local_balance = '1000';
+      await assert.rejects(x.factory.prepare('ab'.repeat(32), x.entry)); assert.equal(x.counts().creates, 0); assert.equal(x.counts().actions, 0);
+    } finally { await x.cleanup(); }
+  }
+});
+
+test('native policy cannot substitute mainnet, amount/fees, guest owner, external endpoints or unsafe storage', { skip: !linux }, async () => {
+  const x = await fixture(); try {
+    for (const patch of [{ mode: 'mainnet' }, { amountSats: 100000 }, { maxBlocks: 3 }, { routingFeeLimitSats: 10000 }, { ownerUsername: 'guest' },
+      { routing: { ...x.policy.routing, payerOrigin: 'https://external.example' } }]) assert.equal(ownedRuntimePolicySchema.safeParse({ ...x.policy, ...patch }).success, false);
+    await assert.rejects(createOwnedRuntimeFactory({ ...x.policy, backupsDirectory: x.policy.runsDirectory }, { get: async () => undefined, verifyCsrf: () => false }, x.io));
+  } finally { await x.cleanup(); }
+});
+
+test('a canceled unpaid invoice is definitively observed before its slot is released and old execution authority is revoked', { skip: !linux }, async () => {
+  const x = await fixture(); try {
+    const runtime = await x.factory.prepare('ab'.repeat(32), x.entry);
+    assert.equal(await runtime.terminal(), undefined); x.cancel(); assert.equal(await runtime.terminal(), 'EXPIRED');
+    assert.equal(runtime.api.list(x.entry.ownerId)[0]!.allowedActions.includes('EXECUTE'), false);
+    await assert.rejects(runtime.authorize('review-canceled-invoice'));
+    assert.equal(x.counts().creates, 1); assert.equal(x.counts().actions, 0); await runtime.close();
+  } finally { await x.cleanup(); }
+});
+
+test('verified completed legacy run remains owner-visible as read-only history without copying custody or granting execution', { skip: !linux }, async () => {
+  const x = await fixture(); let historyFactory: Awaited<ReturnType<typeof createOwnedRuntimeFactory>> | undefined;
+  try {
+    const runtime = await x.factory.prepare('ab'.repeat(32), x.entry); await runtime.close();
+    const directory = join(x.runs, x.entry.attemptId); const store = await Store.open(join(directory, 'store'));
+    await store.transaction(db => { const s = db.swaps[runtime.swapId]!; s.state = 'COMPLETED';
+      s.clientPayment = { hash: s.contract.paymentHash, status: 'SUCCEEDED', feeLimitSats: 100, feeSats: 0 };
+      s.lockup = { txid: 'ab'.repeat(32), vout: 0, hex: 'synthetic-completed-funding' }; s.claimTxid = 'cd'.repeat(32); }); await store.close();
+    const before = await readFile(join(directory, 'store/state.json'));
+    historyFactory = await createOwnedRuntimeFactory({ ...x.policy, archives: [{ directory, specSha256: sha256(await readFile(join(directory, 'spec.json'))) }] },
+      { get: async () => undefined, verifyCsrf: () => false }, x.io);
+    const history = await historyFactory.history!(); assert.equal(history.length, 1);
+    const view = history[0]!.api.list(x.entry.ownerId)[0]!; assert.equal(view.state, 'COMPLETED'); assert.deepEqual(view.allowedActions, []);
+    await assert.rejects(history[0]!.authorize('cannot-reopen-history')); assert.deepEqual(await readFile(join(directory, 'store/state.json')), before);
+    assert.equal(x.counts().actions, 0); await historyFactory.close?.(); historyFactory = undefined;
+  } finally { await historyFactory?.close?.(); await x.cleanup(); }
+});

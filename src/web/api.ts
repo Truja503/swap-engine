@@ -50,10 +50,14 @@ const operationsBalances = z.object({
 });
 export type OperationsBalances = z.infer<typeof operationsBalances>;
 
+const preparation = z.object({ id: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  status: z.enum(['INTENT', 'READY', 'UNKNOWN', 'COMPLETED', 'EXPIRED', 'REJECTED']), swapId: z.nullable(z.uuid()), statusUrl: z.string() });
+export type OwnedPreparation = z.infer<typeof preparation>;
 const reverseAvailability = z.object({
   network: z.literal('regtest'), liveSwapsEnabled: z.literal(false),
   controlledReverseConfigured: z.boolean(), executionAvailable: z.boolean(),
   recoveryAvailable: z.boolean(), preparedSwapIds: z.array(z.uuid()),
+  preparationAvailable: z.optional(z.boolean()), preparations: z.optional(z.array(preparation)),
 });
 const ownedState = z.enum(states);
 const ownedSwap = z.object({
@@ -119,6 +123,15 @@ export const api = {
     body: JSON.stringify({ amountSats }), signal,
   }),
   reverseAvailability: (signal: AbortSignal) => request('/v1/reverse/availability', reverseAvailability, { signal }),
+  preparation: (id: string, signal: AbortSignal) => request('/v1/reverse/preparations/' + encodeURIComponent(id), preparation, { signal }),
+  prepare(key: string, csrf: string) {
+    return request('/v1/reverse/preparations', preparation, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key }, body: JSON.stringify({ amountSats: 50000 }) });
+  },
+  reviewPreparation(id: string, key: string, csrf: string) {
+    return request('/v1/reverse/preparations/' + encodeURIComponent(id) + '/review', preparation, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key }, body: '{}' });
+  },
   ownedSwaps: (signal: AbortSignal) => request('/v1/swaps', ownedList, { signal }),
   ownedSwap: (id: string, signal: AbortSignal) => request('/v1/swaps/' + encodeURIComponent(id), ownedSwap, { signal }),
   reverseAction(id: string, expectedRevision: number, key: string, csrfToken: string, kind: 'execute' | 'reconcile') {

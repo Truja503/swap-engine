@@ -50,7 +50,7 @@ function errorStatus(error: unknown) {
   return 'The server did not confirm the request. Check the swap status.';
 }
 
-export function mountOwnedReverse(onConfigured: (configured: Preparation) => void) {
+export function mountOwnedReverse(onConfigured: (configured: Preparation, availability?: ReverseAvailability) => void) {
   const picker = get<HTMLSelectElement>('prepared-swap');
   const refreshButton = get<HTMLButtonElement>('owned-refresh');
   const reviewButton = get<HTMLButtonElement>('owned-review');
@@ -68,6 +68,29 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
   let loading = false;
   let working = false;
   let poll: number | undefined;
+  let viewEpoch = 0;
+
+  function completedReturn(swap: OwnedSwap, available: ReverseAvailability) {
+    const owner = session;
+    if (!owner || !visible || available.preparationAvailable !== true || swap.state !== 'COMPLETED' ||
+      swap.execution.status !== 'COMPLETED' || swap.payment.status !== 'SUCCEEDED' || !swap.funding.txid || !swap.claim.txid) return;
+    const executionKey = `swap-engine.prepared.${owner.user.id}.${swap.id}.execute.once`;
+    const preparationKey = `swap-engine.preparation.${owner.user.id}`;
+    try {
+      const raw = localStorage.getItem(preparationKey); const saved = raw ? JSON.parse(raw) as { id?: string } : undefined;
+      const prep = available.preparations?.find(p => p.swapId === swap.id);
+      const matchesPreparation = !!prep && saved?.id === prep.id;
+      if (!matchesPreparation && localStorage.getItem(executionKey) === null) return;
+      // Retain public evidence before selective cleanup. Other owners/attempts/recovery keys survive.
+      const evidenceKey = `swap-engine.completed.${owner.user.id}.${swap.id}`;
+      const evidence = JSON.stringify({ id: swap.id, revision: swap.revision, state: swap.state,
+        payment: swap.payment, funding: swap.funding, claim: swap.claim, claimDestination: swap.claimDestination });
+      localStorage.setItem(evidenceKey, evidence);
+      if (localStorage.getItem(evidenceKey) !== evidence) return;
+      localStorage.removeItem(executionKey); if (matchesPreparation) localStorage.removeItem(preparationKey);
+      location.hash = 'swap';
+    } catch { /* Keep the verified history visible when browser storage cannot preserve it. */ }
+  }
 
   function permitted(kind: Action, swap?: OwnedSwap, availability?: ReverseAvailability) {
     if (!availability?.controlledReverseConfigured || !swap || !availability.preparedSwapIds.includes(swap.id)) return false;
@@ -131,7 +154,7 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
       if (requests !== controller) return;
       capability = available;
       configured = available.controlledReverseConfigured;
-      onConfigured(configured);
+      onConfigured(configured, available);
       if (!visible) return;
       if (!available.controlledReverseConfigured) {
         get('owned-controls').hidden = true;
@@ -157,6 +180,7 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
       if (requests !== controller) return;
       if (latest.id !== selected.id) throw new Error('Unexpected swap ID');
       render(latest);
+      completedReturn(latest, available);
       status(notice ?? (permitted('execute', latest, available)
         ? 'Prepared swap available for review.'
         : 'Swap status only. Execution unavailable.'));
@@ -182,6 +206,7 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
 
   async function perform(kind: Action, selected: OwnedSwap) {
     const owner = session;
+    const epoch = viewEpoch;
     if (working || loading || !owner || !visible || !permitted(kind, selected, capability)) return;
     closeReview();
     cancelReads();
@@ -228,8 +253,8 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
       working = false;
       actions();
     }
-    if (session === owner && visible) await refresh(selected.id, notice);
-    else if (session && visible) await refresh();
+    if (viewEpoch === epoch && session === owner && visible) await refresh(selected.id, notice);
+    else if (viewEpoch === epoch && session && visible) await refresh();
   }
 
   picker.addEventListener('change', () => {
@@ -251,6 +276,10 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
       ['Principal', sats(q.amountSats)],
       ['Service fee', sats(q.serviceFeeSats)],
       ['Estimated claim fee', sats(swap.claim.feeSats)],
+      ['Maximum funding fee', sats(q.fundingReserveSats)],
+      ['Maximum routing fee', sats(100)],
+      ['Maximum Lightning debit', sats(q.invoiceSats + 100)],
+      ['Regtest confirmations', 'Up to 2 blocks'],
       ['Routing fee', fee(swap.payment.feeSats)],
       ['Lightning payment', sats(swap.payment.valueSats)],
       ['Expected receipt', sats(swap.claim.netSats)],
@@ -265,6 +294,10 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
   dialog.addEventListener('close', () => { if (!dialog.open) { reviewed = undefined; actions(); } });
 
   return {
+    async reviewPrepared(id: string) {
+      visible = true; const epoch = viewEpoch; await refresh(id);
+      if (visible && epoch === viewEpoch && !get('track').hidden && current?.id === id && permitted('execute', current, capability)) reviewButton.click();
+    },
     setSession(next: Session | null) {
       if (session === next) return;
       cancelReads();
@@ -283,6 +316,7 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation) => voi
     },
     setVisible(next: boolean) {
       if (visible === next) return;
+      viewEpoch++;
       visible = next;
       if (visible) void refresh();
       else {

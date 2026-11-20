@@ -151,6 +151,9 @@ export function createOwnedReverseApi(store: Store, authenticate: OwnerAuthentic
     return response(store.read().ownedReverse!.requests[requestId]!);
   };
   return {
+    list(ownerId: string) {
+      return Object.entries(store.read().ownedReverse?.owners ?? {}).filter(([, v]) => v.ownerId === ownerId).map(([id]) => project(ownerId, id));
+    },
     /** Trusted operator/identity integration only. A browser cannot claim or reassign a swap. */
     async bind(ownerId: string, swapId: string, claimDestination: string) {
       ownerSchema.parse(ownerId); z.uuid().parse(swapId); address.toOutputScript(claimDestination, networks.regtest);
@@ -171,12 +174,24 @@ export function createOwnedReverseApi(store: Store, authenticate: OwnerAuthentic
         error(409, 'EXECUTION_NOT_AUTHORIZED');
       approvals.set(value.swapId, { ...value });
     },
+    /** Explicit authenticated preparation review only; never called on startup/GET.
+     * Refresh the same unused terms after expiry, never an admitted/uncertain execution. */
+    replaceExpiredApproval(value: Approved) {
+      const prior = approvals.get(value.swapId);
+      if (execution(store.read(), value.swapId) || (prior && (prior.expiresAt > now() || prior.ownerId !== value.ownerId ||
+        prior.termsDigest !== value.termsDigest || prior.expectedRevision !== value.expectedRevision))) error(409, 'EXECUTION_NOT_AUTHORIZED');
+      if (prior) approvals.delete(value.swapId);
+      try { this.approve(value); } catch (caught) { if (prior) approvals.set(value.swapId, prior); throw caught; }
+    },
+    revokeUnusedApproval(swapId: string) {
+      if (execution(store.read(), swapId)) error(409, 'EXECUTION_ALREADY_RESERVED'); approvals.delete(swapId);
+    },
     async drain() {
       closing = true;
       if (requests) await new Promise<void>(resolve => { drained.push(resolve); });
       await Promise.allSettled([...live.values()]);
     },
-    async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    async handle(req: IncomingMessage, res: ServerResponse, parsedBody?: { value: unknown }): Promise<boolean> {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
       if (path !== '/v1/reverse/availability' && path !== '/v1/quotes' && path !== '/v1/swaps' && !path.startsWith('/v1/swaps/')) return false;
       requests++;
@@ -206,7 +221,7 @@ export function createOwnedReverseApi(store: Store, authenticate: OwnerAuthentic
         if (path === '/v1/quotes') error(409, 'USE_PREPARED_SWAP');
         if (req.method === 'GET' && path === '/v1/swaps') { send(200, { network: 'regtest', swaps: Object.entries(store.read().ownedReverse?.owners ?? {}).filter(([, v]) => v.ownerId === ownerId).map(([id]) => project(ownerId, id)) }); return true; }
         if (req.method === 'POST' && path === '/v1/swaps/reverse') {
-          const input = ownedSubmitRequest.parse(await body(req));
+          const input = ownedSubmitRequest.parse(parsedBody ? parsedBody.value : await body(req));
           const result = await perform(ownerId, input.preparedSwapId, input.expectedRevision, String(req.headers['idempotency-key'] ?? ''), 'EXECUTE'); send(result.httpStatus, result.value); return true;
         }
         const match = /^\/v1\/swaps\/([a-f0-9-]{36})(?:\/(revision|execute|reconcile))?$/.exec(path);
@@ -215,7 +230,7 @@ export function createOwnedReverseApi(store: Store, authenticate: OwnerAuthentic
         if (req.method === 'GET' && !match[2]) { send(200, project(ownerId, id)); return true; }
         if (req.method === 'GET' && match[2] === 'revision') { send(200, { id, revision: owned(ownerId, id).swap.revision }); return true; }
         if (req.method === 'POST' && ['execute', 'reconcile'].includes(match[2] ?? '')) {
-          const input = ownedExecuteRequest.parse(await body(req));
+          const input = ownedExecuteRequest.parse(parsedBody ? parsedBody.value : await body(req));
           const result = await perform(ownerId, id, input.expectedRevision, String(req.headers['idempotency-key'] ?? ''), match[2] === 'execute' ? 'EXECUTE' : 'RECONCILE'); send(result.httpStatus, result.value); return true;
         }
         error(404, 'NOT_FOUND');

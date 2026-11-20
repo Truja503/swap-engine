@@ -3,7 +3,7 @@ import { mountCubes } from './cubes.js';
 import { canQuote, defaultPair, railLabel, type Pair } from './rails.js';
 import { details, get, integer, message, sats, text } from './ui.js';
 
-export function mountQuote() {
+export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<void>) {
   const form = get<HTMLFormElement>('quote-form');
   const amount = get<HTMLInputElement>('amount');
   const action = get<HTMLButtonElement>('swap-action');
@@ -17,6 +17,7 @@ export function mountQuote() {
   let visible = false;
   let controlled: boolean | 'unavailable' | null = null;
   let csrf: string | undefined;
+  let canPrepare = false; let preparing = false;
   let revision = 0;
   let quote: Quote | undefined;
   let pending: { controller: AbortController; work: Promise<Quote | undefined> } | undefined;
@@ -86,8 +87,8 @@ export function mountQuote() {
   function schedule(delay: number) {
     if (!visible) return;
     if (controlled !== false) {
-      action.disabled = controlled !== true || !aligned || !canQuote(pair);
-      status(controlled === true ? action.disabled ? 'Route unavailable' : 'Review a prepared swap.'
+      action.disabled = preparing || controlled !== true || !aligned || !canQuote(pair);
+      status(controlled === true ? preparing ? 'Preparing your regtest swap for review…' : action.disabled ? 'Route unavailable' : canPrepare ? 'Prepare a 50,000 sat regtest swap for review.' : 'Review a prepared swap.'
         : controlled === 'unavailable' ? 'Quote service unavailable.' : 'Checking quote availability…');
       return;
     }
@@ -120,6 +121,16 @@ export function mountQuote() {
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (controlled === true) {
+      if (preparing) return;
+      if (canPrepare && prepare && !preparing && aligned && canQuote(pair)) {
+        const version = revision; const active = () => visible && version === revision && controlled === true;
+        let failure: string | undefined;
+        preparing = true; schedule(0);
+        try { await prepare(active); }
+        catch (error) { failure = error instanceof Error ? error.message : 'Preparation uncertain. Check existing status.'; }
+        finally { preparing = false; if (visible) { schedule(0); if (active() && failure) status(failure); } }
+        return;
+      }
       if (aligned && canQuote(pair)) location.hash = 'track';
       return;
     }
@@ -166,11 +177,13 @@ export function mountQuote() {
       invalidate();
       schedule(0);
     },
-    setContext(configured: boolean | 'unavailable' | null, csrfToken?: string) {
-      if (controlled === configured && csrf === csrfToken) return;
+    setContext(configured: boolean | 'unavailable' | null, csrfToken?: string, preparationAvailable = false) {
+      if (controlled === configured && csrf === csrfToken && canPrepare === preparationAvailable) return;
       controlled = configured;
       csrf = csrfToken;
+      canPrepare = preparationAvailable;
       amount.readOnly = configured === true;
+      if (canPrepare) amount.value = '50000';
       invalidate();
       schedule(0);
     },

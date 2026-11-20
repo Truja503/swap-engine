@@ -10,6 +10,17 @@ import { SwapManager } from './core/SwapManager.js';
 import { config, type ApplicationMode } from './config.js';
 import { recoverInterruptedReverseRuns } from './api/reverseRecovery.js';
 import { parseOperatorCommand, runOperatorCLI } from '../scripts/run-controlled-reverse.js';
+import { isAbsolute } from 'node:path';
+import { checkedJSON } from './operator/OperatorFiles.js';
+import { createOwnedRuntimeFactory, ownedRuntimePolicySchema } from './operator/OwnedPreparationRuntime.js';
+import { createOwnedPreparation } from './api/ownedPreparation.js';
+
+export function ownedStartupArguments(args: string[], mode: ApplicationMode) {
+  if (args[0] !== '--owned-regtest') return undefined;
+  if (mode !== 'regtest' || args.length !== 5 || args[1] !== '--policy-path' || !isAbsolute(args[2] ?? '') ||
+    args[3] !== '--policy-sha256' || !/^[a-f0-9]{64}$/.test(args[4] ?? '')) throw new Error('OWNED_STARTUP_REJECTED');
+  return { path: args[2]!, hash: args[4]! };
+}
 
 /** Only native reviewed serve modes can be installed; no action or credential comes from HTTP. */
 export function controlledStartupArguments(args: string[], mode: ApplicationMode): string[] | undefined {
@@ -29,7 +40,8 @@ type Dependencies = {
 
 /** Real app entrypoint, also exercised offline with mock node/operator adapters. */
 export async function startApplication(env: NodeJS.ProcessEnv = process.env, args: string[] = [], dependencies: Dependencies = {}) {
-  const c = config(env); const operatorArgs = controlledStartupArguments(args, c.mode);
+  const c = config(env); const ownedArgs = ownedStartupArguments(args, c.mode);
+  const operatorArgs = ownedArgs ? undefined : controlledStartupArguments(args, c.mode);
   let liquidity: () => Promise<Balances>; let diagnostics: (() => ReturnType<typeof preflight>) | undefined;
   let operations: (() => Promise<OperationsBalances>) | undefined;
   if (dependencies.reads) ({ liquidity, diagnostics, operations } = dependencies.reads);
@@ -50,6 +62,20 @@ export async function startApplication(env: NodeJS.ProcessEnv = process.env, arg
     await recoverInterruptedReverseRuns(store);
     const server = createApi(new SwapManager(store), liquidity, diagnostics, c.mode,
       { operations, auth: { storePath: env.AUTH_STORE_PATH, origin: env.AUTH_ORIGIN } });
+    if (ownedArgs) {
+      let factory: Awaited<ReturnType<typeof createOwnedRuntimeFactory>> | undefined;
+      try {
+        const policy = ownedRuntimePolicySchema.parse(await checkedJSON(ownedArgs.path, ownedArgs.hash));
+        // One Sessions instance, one catalog writer, exact account store and same browser origin.
+        if (policy.authStorePath !== env.AUTH_STORE_PATH || policy.origin !== env.AUTH_ORIGIN || policy.port !== (dependencies.port ?? c.port)) throw new Error('OWNED_STARTUP_REJECTED');
+        factory = await createOwnedRuntimeFactory(policy, server.controlled.operatorIO.sessions);
+        server.controlled.installPreparation(await createOwnedPreparation(store, server.controlled.operatorIO.sessions, factory,
+          { mode: 'regtest', ownerId: policy.ownerId, ownerUsername: 'truja503', origin: policy.origin, profileDigest: ownedArgs.hash }));
+      } catch {
+        await factory?.close?.();
+        console.error('OWNED_PREPARATION_STOPPED: preserve runs; no automatic invoice or payment retry');
+      }
+    }
     await new Promise<void>((ready, reject) => { server.once('error', reject); server.listen(dependencies.port ?? c.port, '127.0.0.1', () => { server.off('error', reject); ready(); }); });
     // Failed readiness leaves the app usable with controlled execution closed; never retry.
     const runtime = operatorArgs ? (dependencies.operator ?? runOperatorCLI)(operatorArgs, server.controlled.operatorIO) : undefined;

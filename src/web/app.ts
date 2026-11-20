@@ -1,4 +1,5 @@
 import { api, type Session } from './api.js';
+import { prepareForReview } from './preparation.js';
 import { mountAuth } from './auth.js';
 import { fonts } from './fonts.js';
 import { playOpening } from './opening.js';
@@ -7,11 +8,18 @@ import { mountOwnedReverse } from './ownedReverse.js';
 import { mountQuote } from './quote.js';
 import { get, integer, text } from './ui.js';
 
-const quotes = mountQuote();
+const quotes = mountQuote(async stillVisible => {
+  const owner = session;
+  if (!owner) throw new Error('Sign in to prepare a regtest swap.');
+  const availability = await api.reverseAvailability(new AbortController().signal);
+  const id = await prepareForReview(owner, availability);
+  if (session !== owner || !stillVisible()) return;
+  location.hash = 'track'; await reverse.reviewPrepared(id);
+});
 let session: Session | null = null;
-const reverse = mountOwnedReverse(configured => {
+const reverse = mountOwnedReverse((configured, availability) => {
   get('prepared-swap-link').hidden = configured !== true;
-  quotes.setContext(configured, session?.csrfToken);
+  quotes.setContext(configured, session?.csrfToken, availability?.preparationAvailable === true);
 });
 const setBalancesActive = mountOperationsBalances();
 void fonts;

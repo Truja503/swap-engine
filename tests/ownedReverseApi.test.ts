@@ -64,6 +64,22 @@ async function fixture(clientAddress?: string) {
     cleanup: async () => { await new Promise<void>(r => server!.close(() => r())); await api.drain(); await f.cleanup(); } };
 }
 
+test('explicit review refreshes only expired identical unused terms and never reopens an admitted execution', async () => {
+  const x = await fixture(); try {
+    const value = () => ({ ownerId: 'alice', swapId: x.id, expectedRevision: 3, termsDigest: 'ef'.repeat(32),
+      expiresAt: Date.now() + 600000, execute: async () => ({ id: x.id, state: 'COMPLETED', revision: 3 }) });
+    assert.throws(() => x.api.replaceExpiredApproval(value()));
+    x.advance(300001);
+    assert.throws(() => x.api.replaceExpiredApproval({ ...value(), ownerId: 'bob' }));
+    assert.throws(() => x.api.replaceExpiredApproval({ ...value(), termsDigest: '00'.repeat(32) }));
+    x.api.replaceExpiredApproval(value()); assert.equal(x.api.list('alice')[0]!.allowedActions.includes('EXECUTE'), true);
+    await x.f.store.transaction(db => { db.ownedReverse!.requests['reserved'] = { ownerId: 'alice', swapId: x.id, kind: 'EXECUTE',
+      fingerprint: '12'.repeat(32), attemptId: randomUUID(), expectedRevision: 3, createdAt: Date.now(), status: 'UNKNOWN' }; });
+    x.advance(600001); assert.throws(() => x.api.replaceExpiredApproval({ ...value(), expiresAt: Date.now() + 1500000 }));
+    assert.throws(() => x.api.revokeUnusedApproval(x.id)); assert.equal(x.executions(), 0);
+  } finally { await x.cleanup(); }
+});
+
 test('owner status/list/revision and recovery do not leak or admit another user or anonymous caller', async () => {
   const x = await fixture(); try {
     for (const path of ['/v1/swaps', `/v1/swaps/${x.id}`, `/v1/swaps/${x.id}/revision`]) {

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fixture as contractFixture, routingFixture } from './helpers.js';
+import { fixture as contractFixture, routingFixture, privateTestDirectory } from './helpers.js';
 import { Store } from '../src/persistence/Store.js';
 import { updateSwapRevision } from '../src/core/SwapStateMachine.js';
 import { createReversePreparation, preparationDigest, type PreparationSpec, type PreparationAdapters, type PreparationApproval } from '../src/core/ReversePreparation.js';
@@ -12,7 +12,7 @@ import type { Invoice } from '../src/lightning/LndClient.js';
 
 export async function preparationFixture() {
   const f = contractFixture();
-  await mkdir('data/tests', { recursive: true }); const directory = await mkdtemp(join(process.cwd(), 'data/tests/preparation-'));
+  const directory = await privateTestDirectory('preparation');
   let store = await Store.open(directory); let clock = Date.now(); let exists = false; let calls = 0; let posts = 0; let inspections = 0;
   const spec: PreparationSpec = { id: randomUUID(), isolationId: randomUUID(), tipHeight: 100,
     providerNode: f.contract.claimPublicKey, payerNode: f.contract.refundPublicKey, routing: routingFixture(),

@@ -80,6 +80,31 @@ async function runnerFixture(options: RunnerOptions = {}) {
   };
 }
 
+test('two runners racing before payment intent start at most one payer', async () => {
+  const x = await runnerFixture({ waitAccepted: async () => { throw new Error('stop after payer admission'); } });
+  try {
+    const invoice = x.f.ports.invoice;
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    x.f.ports.invoice = async hash => {
+      const value = await invoice(hash);
+      if (++arrivals === 2) release();
+      await barrier;
+      return value;
+    };
+    const outcomes = await Promise.allSettled([
+      runControlledReverse(x.f.store, x.f.ports, x.controls, x.f.swap.id),
+      runControlledReverse(x.f.store, x.f.ports, x.controls, x.f.swap.id),
+    ]);
+    assert.equal(arrivals, 2);
+    assert.equal(outcomes.filter(result => result.status === 'rejected').length, 2);
+    assert.equal(x.counters.started, 1);
+    assert.equal(x.f.calls.funding, 0);
+    assert.equal(x.f.store.read().swaps[x.f.swap.id]!.clientPayment?.status, 'UNKNOWN');
+  } finally { await x.f.cleanup(); }
+});
+
 test('runner refuses canceled, expired, substituted, overpaid and already-held invoices before any payer or funding action', async () => {
   const cases: Array<{ name: string; change: (invoice: Invoice) => Invoice }> = [
     { name: 'canceled', change: invoice => ({ ...invoice, state: 'CANCELED' }) },

@@ -11,6 +11,10 @@ import { recoveryPaymentsPath } from '../src/lightning/LndPayerRecovery.js';
 import type { Invoice } from '../src/lightning/LndClient.js';
 import { Store } from '../src/persistence/Store.js';
 import { sha256 } from '../src/operator/OperatorFiles.js';
+import { Transaction, address, networks } from 'bitcoinjs-lib';
+import { buildHtlc } from '../src/bitcoin/HtlcBuilder.js';
+import { ClaimWallet } from '../src/client/ClaimWallet.js';
+import { SecretVault } from '../src/persistence/SecretVault.js';
 
 const linux = process.platform === 'linux';
 async function fixture() {
@@ -31,7 +35,14 @@ async function fixture() {
   const paymentRequest = 'lnbcrt' + 'c'.repeat(30);
   let history: unknown = { payments: [], first_index_offset: '0', last_index_offset: '0' };
   const invoice = (): Invoice => ({ state: canceled ? 'CANCELED' : 'OPEN', r_hash: Buffer.from(hash, 'hex').toString('base64'), value: '50750', amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] });
-  const bitcoin = { ...x.bitcoin, confirmed: async () => { throw Error('No recovery chain evidence required by this test'); }, assertRegtest: async () => x.chain };
+  const confirmed = new Map<string, { hex: string; confirmations: number }>(); const blockHashes = new Map<number, string>();
+  const bitcoin = { ...x.bitcoin,
+    async call<T>(method: string, params: unknown[] = [], wallet = false): Promise<T> {
+      if (method === 'getblockhash' && blockHashes.has(Number(params[0]))) return blockHashes.get(Number(params[0])) as T;
+      return x.bitcoin.call<T>(method, params, wallet);
+    },
+    confirmed: async (id: string) => { const found = confirmed.get(id); if (!found) throw Error('Unavailable archive transaction'); return found; },
+    assertRegtest: async () => x.chain };
   const provider = { ...x.provider, assertRegtest: async () => x.providerInfo, lookup: async (h: string) => { assert.equal(h, hash); if (!exists) throw Error('absent'); return invoice(); } };
   const payer = { ...x.payer, assertRegtest: async () => x.payerInfo,
     async call<T>(path: string): Promise<T> {
@@ -65,6 +76,8 @@ async function fixture() {
   return { x, factory, entry, runs, policy, io, counts: () => ({ creates, actions, inspections, clocks }),
     lose: () => { lost = true; }, cancel: () => { canceled = true; }, noClock: () => { ntp = false; }, foreignAddress: () => { owns = false; },
     history: (value: unknown) => { history = value; },
+    recordConfirmed: (tx: Transaction, confirmations: number) => { confirmed.set(tx.getId(), { hex: tx.toHex(), confirmations }); },
+    recordBlock: (height: number, hash: string) => { blockHashes.set(height, hash); },
     cleanup: async () => { await factory.close?.(); await x.f.cleanup(); } };
 }
 
@@ -152,14 +165,32 @@ test('verified completed legacy run remains owner-visible as read-only history w
   try {
     const runtime = await x.factory.prepare('ab'.repeat(32), x.entry); await runtime.close();
     const directory = join(x.runs, x.entry.attemptId); const store = await Store.open(join(directory, 'store'));
+    const contract = store.read().swaps[runtime.swapId]!.contract;
+    const funding = new Transaction(); funding.version = 2; funding.addInput(Buffer.alloc(32, 9), 0);
+    funding.addOutput(buildHtlc(contract).output, 50000n);
+    funding.addOutput(address.toOutputScript(x.policy.refundDestination, networks.regtest), 49900n);
+    const password = await readFile(x.policy.passwordPath); const vault = await SecretVault.open(join(directory, 'client-secrets'), password); password.fill(0);
+    const wallet = await ClaimWallet.restore(vault, contract.paymentHash); let claim: Transaction;
+    try { claim = wallet.signClaim({ contract, lockupTxHex: funding.toHex(), vout: 0, destination: x.policy.claimDestination, feeSats: 500 }); }
+    finally { wallet.destroy(); vault.close(); }
+    x.recordConfirmed(funding, 2); x.recordConfirmed(claim!, 1); x.recordBlock(101, 'a1'.repeat(32)); x.recordBlock(102, 'a2'.repeat(32));
+    x.x.chain.blocks = x.x.chain.headers = 102; x.x.chain.bestblockhash = 'a2'.repeat(32);
+    for (const info of [x.x.providerInfo, x.x.payerInfo]) { info.block_height = 102; info.block_hash = x.x.chain.bestblockhash; }
     await store.transaction(db => { const s = db.swaps[runtime.swapId]!; s.state = 'COMPLETED';
       s.clientPayment = { hash: s.contract.paymentHash, status: 'SUCCEEDED', feeLimitSats: 100, feeSats: 0 };
-      s.lockup = { txid: 'ab'.repeat(32), vout: 0, hex: 'synthetic-completed-funding' }; s.claimTxid = 'cd'.repeat(32); }); await store.close();
+      s.lockup = { txid: funding.getId(), vout: 0, hex: funding.toHex() }; s.claimTxid = claim!.getId();
+      // Real runner shape: CONFIRMED mining intents have no blockHash; the observer does.
+      s.miningIntents = [{ txid: funding.getId(), fromHeight: 100, status: 'CONFIRMED' }, { txid: claim!.getId(), fromHeight: 101, status: 'CONFIRMED' }];
+      (db.chainObservations ??= {})[`${funding.getId()}:0`] = { fromHeight: 101, height: 102, blockHash: 'a2'.repeat(32),
+        spend: { txid: claim!.getId(), height: 102, blockHash: 'a2'.repeat(32) } };
+    }); await store.close();
     const before = await readFile(join(directory, 'store/state.json'));
     historyFactory = await createOwnedRuntimeFactory({ ...x.policy, archives: [{ directory, specSha256: sha256(await readFile(join(directory, 'spec.json'))) }] },
       { get: async () => undefined, verifyCsrf: () => false }, x.io);
     const history = await historyFactory.history!(); assert.equal(history.length, 1);
     const view = history[0]!.api.list(x.entry.ownerId)[0]!; assert.equal(view.state, 'COMPLETED'); assert.deepEqual(view.allowedActions, []);
+    const checked = await historyFactory.preflight!() as { archives: Array<{ checkpointHeight: number }> };
+    assert.equal(checked.archives[0]!.checkpointHeight, 102);
     await assert.rejects(history[0]!.authorize('cannot-reopen-history')); assert.deepEqual(await readFile(join(directory, 'store/state.json')), before);
     assert.equal(x.counts().actions, 0); await historyFactory.close?.(); historyFactory = undefined;
     x.x.chain.blocks = 99;
@@ -169,8 +200,8 @@ test('verified completed legacy run remains owner-visible as read-only history w
     assert.deepEqual(await readFile(join(directory, 'store/state.json')), before);
     await historyFactory.close?.(); historyFactory = undefined;
     x.x.chain.blocks = 102; x.x.chain.headers = 102;
-    const checkpoints = [{ txid: 'ab'.repeat(32), fromHeight: 100, status: 'CONFIRMED' as const, blockHash: 'a1'.repeat(32) },
-      { txid: 'cd'.repeat(32), fromHeight: 101, status: 'CONFIRMED' as const, blockHash: 'a2'.repeat(32) }];
+    const checkpoints = [{ txid: funding.getId(), fromHeight: 100, status: 'CONFIRMED' as const, blockHash: 'a1'.repeat(32) },
+      { txid: claim!.getId(), fromHeight: 101, status: 'CONFIRMED' as const, blockHash: 'a2'.repeat(32) }];
     const checkpointStore = await Store.open(join(directory, 'store')); await checkpointStore.transaction(db => { db.swaps[runtime.swapId]!.miningIntents = checkpoints; }); await checkpointStore.close();
     let fork = true; const clients = x.io.clients!(x.policy);
     const forkIO = { ...x.io, clients: () => ({ ...clients, bitcoin: { ...clients.bitcoin,
@@ -184,5 +215,10 @@ test('verified completed legacy run remains owner-visible as read-only history w
     await historyFactory.close?.(); historyFactory = undefined; fork = false;
     historyFactory = await createOwnedRuntimeFactory(archivedPolicy, { get: async () => undefined, verifyCsrf: () => false }, forkIO);
     assert.equal((await historyFactory.history!()).length, 1);
+    await historyFactory.close?.(); historyFactory = undefined;
+    const tampered = Transaction.fromHex(claim!.toHex()); tampered.ins[0]!.witness[1] = Buffer.alloc(32);
+    x.recordConfirmed(tampered, 1); // Same txid, invalid witness: checkpoint text alone is insufficient.
+    historyFactory = await createOwnedRuntimeFactory(archivedPolicy, { get: async () => undefined, verifyCsrf: () => false }, forkIO);
+    await assert.rejects(historyFactory.history!());
   } finally { await historyFactory?.close?.(); await x.cleanup(); }
 });

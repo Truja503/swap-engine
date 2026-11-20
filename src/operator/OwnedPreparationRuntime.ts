@@ -11,6 +11,7 @@ import { ownedRunPolicySchema, prepareOwnedRunCustody } from './OwnedRunCustody.
 import { actionPathsSchema, inspectNativeActions, probeCoreAction, nativeActionDependencies } from './NativeActionCredentials.js';
 import { protectedBytes, checkedJSON, operatorDirectory, operatorArtifact, operatorStopped, sha256 } from './OperatorFiles.js';
 import { verifyCustodyBackup, backupSchema } from './CustodyBackup.js';
+import { verifyArchivedChain } from './ArchiveEvidence.js';
 import { ReadOnlyBitcoinClient, ReadOnlyLndClient } from '../diagnostics/ReadOnlyClients.js';
 import { HttpsLndInvoiceTransport } from '../lightning/LndInvoiceTransport.js';
 import { LndRecoveryClient, LndPayerRecovery, recoveryPaymentsPath, assertRecoveryNode } from '../lightning/LndPayerRecovery.js';
@@ -246,9 +247,15 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
         claimDestination: policy.claimDestination, refundDestination: policy.refundDestination,
         input: { txid: '00'.repeat(32), vout: 0, valueSats: 61000 } });
       const coreScope = await io.probe(spec, policy.actions, inspected, clients.bitcoin);
+      const archives = [];
+      for (const archive of policy.archives) {
+        const archivedSpec = preparationSpecSchema.parse(await checkedJSON(join(archive.directory, 'spec.json'), archive.specSha256));
+        const db = JSON.parse((await protectedBytes(join(archive.directory, 'store/state.json'))).toString());
+        archives.push(await verifyArchivedChain(db, archivedSpec, policy.ownerId, policy.claimDestination, clients.bitcoin));
+      }
       return { status: 'REGTEST_PROFILE_CHECKED_NO_INVOICE_OR_PAYMENT', height: chain.blocks, network: 'regtest',
         providerNode: policy.providerNode, payerNode: policy.payerNode, channelId: policy.routing.channelId, claimDestination: policy.claimDestination,
-        coreScope, permissions: { provider: inspected.settle.permissions, payer: inspected.pay.permissions } };
+        coreScope, archives, permissions: { provider: inspected.settle.permissions, payer: inspected.pay.permissions } };
     },
     async history() {
       const result: PreparedRuntime[] = [];
@@ -262,15 +269,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
           const db = store.read(); const swaps = Object.values(db.swaps); const swap = swaps[0];
           if (swaps.length !== 1 || !swap || swap.state !== 'COMPLETED' || swap.clientPayment?.status !== 'SUCCEEDED' || !swap.lockup || !swap.claimTxid ||
             db.ownedReverse?.owners[swap.id]?.ownerId !== policy.ownerId || swap.contract.paymentHash !== spec.client.paymentHash) throw operatorStopped();
-          // A VM snapshot/chain rollback cannot turn an old COMPLETED journal into
-          // permission for a fresh cycle. Require its recorded chain checkpoints.
-          const chain = z.object({ chain: z.literal('regtest'), initialblockdownload: z.literal(false), blocks: z.number().int().nonnegative() })
-            .parse(await clients.bitcoin.call('getblockchaininfo'));
-          if (chain.blocks < spec.tipHeight) throw operatorStopped();
-          for (const checkpoint of swap.miningIntents ?? []) {
-            if (checkpoint.status !== 'CONFIRMED' || !checkpoint.blockHash || chain.blocks <= checkpoint.fromHeight ||
-              await clients.bitcoin.call('getblockhash', [checkpoint.fromHeight + 1]) !== checkpoint.blockHash) throw operatorStopped();
-          }
+          await verifyArchivedChain(db, spec, policy.ownerId, policy.claimDestination, clients.bitcoin);
           const api = createOwnedReverseApi(store, sessionOwnerAuthenticator(sessions), { origin: policy.origin });
           if (api.list(policy.ownerId).length !== 1) throw operatorStopped();
           const runtime: PreparedRuntime = { swapId: swap.id, api, authorize: async () => { throw operatorStopped(); }, terminal: async () => 'COMPLETED',

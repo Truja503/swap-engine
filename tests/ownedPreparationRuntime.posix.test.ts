@@ -162,5 +162,27 @@ test('verified completed legacy run remains owner-visible as read-only history w
     const view = history[0]!.api.list(x.entry.ownerId)[0]!; assert.equal(view.state, 'COMPLETED'); assert.deepEqual(view.allowedActions, []);
     await assert.rejects(history[0]!.authorize('cannot-reopen-history')); assert.deepEqual(await readFile(join(directory, 'store/state.json')), before);
     assert.equal(x.counts().actions, 0); await historyFactory.close?.(); historyFactory = undefined;
+    x.x.chain.blocks = 99;
+    historyFactory = await createOwnedRuntimeFactory({ ...x.policy, archives: [{ directory, specSha256: sha256(await readFile(join(directory, 'spec.json'))) }] },
+      { get: async () => undefined, verifyCsrf: () => false }, x.io);
+    await assert.rejects(historyFactory.history!()); // Snapshot predates the completed run; no new cycle can be installed.
+    assert.deepEqual(await readFile(join(directory, 'store/state.json')), before);
+    await historyFactory.close?.(); historyFactory = undefined;
+    x.x.chain.blocks = 102; x.x.chain.headers = 102;
+    const checkpoints = [{ txid: 'ab'.repeat(32), fromHeight: 100, status: 'CONFIRMED' as const, blockHash: 'a1'.repeat(32) },
+      { txid: 'cd'.repeat(32), fromHeight: 101, status: 'CONFIRMED' as const, blockHash: 'a2'.repeat(32) }];
+    const checkpointStore = await Store.open(join(directory, 'store')); await checkpointStore.transaction(db => { db.swaps[runtime.swapId]!.miningIntents = checkpoints; }); await checkpointStore.close();
+    let fork = true; const clients = x.io.clients!(x.policy);
+    const forkIO = { ...x.io, clients: () => ({ ...clients, bitcoin: { ...clients.bitcoin,
+      call: async <T>(method: string, params: unknown[] = [], wallet = false): Promise<T> => {
+        if (method === 'getblockhash') return (fork ? 'ff'.repeat(32) : checkpoints.find(c => c.fromHeight + 1 === params[0])!.blockHash) as T;
+        return clients.bitcoin.call<T>(method, params, wallet);
+      } } }) as unknown as ReturnType<OwnedNativeIO['clients']> };
+    const archivedPolicy = { ...x.policy, archives: [{ directory, specSha256: sha256(await readFile(join(directory, 'spec.json'))) }] };
+    historyFactory = await createOwnedRuntimeFactory(archivedPolicy, { get: async () => undefined, verifyCsrf: () => false }, forkIO);
+    await assert.rejects(historyFactory.history!()); // Same or higher height with different checkpoints also fails closed.
+    await historyFactory.close?.(); historyFactory = undefined; fork = false;
+    historyFactory = await createOwnedRuntimeFactory(archivedPolicy, { get: async () => undefined, verifyCsrf: () => false }, forkIO);
+    assert.equal((await historyFactory.history!()).length, 1);
   } finally { await historyFactory?.close?.(); await x.cleanup(); }
 });

@@ -262,6 +262,15 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
           const db = store.read(); const swaps = Object.values(db.swaps); const swap = swaps[0];
           if (swaps.length !== 1 || !swap || swap.state !== 'COMPLETED' || swap.clientPayment?.status !== 'SUCCEEDED' || !swap.lockup || !swap.claimTxid ||
             db.ownedReverse?.owners[swap.id]?.ownerId !== policy.ownerId || swap.contract.paymentHash !== spec.client.paymentHash) throw operatorStopped();
+          // A VM snapshot/chain rollback cannot turn an old COMPLETED journal into
+          // permission for a fresh cycle. Require its recorded chain checkpoints.
+          const chain = z.object({ chain: z.literal('regtest'), initialblockdownload: z.literal(false), blocks: z.number().int().nonnegative() })
+            .parse(await clients.bitcoin.call('getblockchaininfo'));
+          if (chain.blocks < spec.tipHeight) throw operatorStopped();
+          for (const checkpoint of swap.miningIntents ?? []) {
+            if (checkpoint.status !== 'CONFIRMED' || !checkpoint.blockHash || chain.blocks <= checkpoint.fromHeight ||
+              await clients.bitcoin.call('getblockhash', [checkpoint.fromHeight + 1]) !== checkpoint.blockHash) throw operatorStopped();
+          }
           const api = createOwnedReverseApi(store, sessionOwnerAuthenticator(sessions), { origin: policy.origin });
           if (api.list(policy.ownerId).length !== 1) throw operatorStopped();
           const runtime: PreparedRuntime = { swapId: swap.id, api, authorize: async () => { throw operatorStopped(); }, terminal: async () => 'COMPLETED',

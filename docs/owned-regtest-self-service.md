@@ -30,6 +30,8 @@ Tras COMPLETED autoritativo con pago SUCCEEDED y ambos txids, la UI guarda evide
 
 Limitación conservadora: si la preparación queda UNKNOWN sin runtime montado, se requiere lookup/reinicio controlado para restaurarla; nunca se sustituye por otra factura. Un lock huérfano o una evidencia de recuperación no soportada requieren revisión del operador. Los fallos antes de invocar el harness de factura se distinguen como REJECTED; permiten otro intento explícito sin reusar ni sobrescribir custodia parcial.
 
+El writer de creación debe ser el mismo archivo de credencial invoices-only inspeccionado para Provider. La ausencia de pago exige una página completa con hashes/índices y offsets coherentes; páginas de 100 registros, truncadas o incompatibles se rechazan sin otorgar nueva autoridad ni liberar la reserva.
+
 Custodia: claves nuevas cifradas y backup restaurado antes de la factura; copias locales en la misma VM no son independientes físicamente. Secretos solo servidor, nunca en JSON público, URL, stdout, navegador ni Git. Un único catalog Store serializa admisiones; cada run mantiene su propio writer y action intents. Cierre espera al journaling antes de liberar locks; no se borran locks huérfanos automáticamente. Los runs históricos configurados solo admiten lectura/replay de resultados, nunca nueva autoridad.
 
 El servicio systemd conserva loopback, `Restart=no`, `NoNewPrivileges`, `ProtectSystem=strict` y `ProtectHome=read-only`; solo app-data, directorios de runs/backups y stores históricos configurados deben ser escribibles. `ENABLE_LIVE_SWAPS=false` permanece obligatorio. No desplegar sobre cuentas, vaults ni datos existentes; usar release separado y detener únicamente 3101 después de comprobar que no hay ejecución activa.

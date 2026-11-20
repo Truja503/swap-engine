@@ -29,6 +29,7 @@ async function fixture() {
     amountSats: 50000, invoiceSats: 50750, fundingFeeLimitSats: 1000, routingFeeLimitSats: 100, claimFeeSats: 500, maxBlocks: 2, maxInputSats: 1000000 });
   let exists = false; let hash = ''; let creates = 0; let actions = 0; let inspections = 0; let clocks = 0; let lost = false; let ntp = true; let owns = true; let canceled = false;
   const paymentRequest = 'lnbcrt' + 'c'.repeat(30);
+  let history: unknown = { payments: [], first_index_offset: '0', last_index_offset: '0' };
   const invoice = (): Invoice => ({ state: canceled ? 'CANCELED' : 'OPEN', r_hash: Buffer.from(hash, 'hex').toString('base64'), value: '50750', amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] });
   const bitcoin = { ...x.bitcoin, confirmed: async () => { throw Error('No recovery chain evidence required by this test'); }, assertRegtest: async () => x.chain };
   const provider = { ...x.provider, assertRegtest: async () => x.providerInfo, lookup: async (h: string) => { assert.equal(h, hash); if (!exists) throw Error('absent'); return invoice(); } };
@@ -48,7 +49,7 @@ async function fixture() {
         if (lost) throw Error('synthetic-lost-invoice-response'); return { payment_request: paymentRequest };
       } },
     recoveryPayer: { origin: policy.routing.payerOrigin, async call<T>(path: string): Promise<T> {
-      if (path === recoveryPaymentsPath) return { payments: [] } as T;
+      if (path === recoveryPaymentsPath) return structuredClone(history) as T;
       assert.equal(path, '/v1/getinfo'); return x.payerInfo as T;
     } } };
   const io: Partial<OwnedNativeIO> = { clients: () => clients as unknown as ReturnType<OwnedNativeIO['clients']>,
@@ -63,6 +64,7 @@ async function fixture() {
   const entry = { ownerId: owner.id, fingerprint: 'ab'.repeat(32), attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT' as const };
   return { x, factory, entry, runs, policy, io, counts: () => ({ creates, actions, inspections, clocks }),
     lose: () => { lost = true; }, cancel: () => { canceled = true; }, noClock: () => { ntp = false; }, foreignAddress: () => { owns = false; },
+    history: (value: unknown) => { history = value; },
     cleanup: async () => { await factory.close?.(); await x.f.cleanup(); } };
 }
 
@@ -112,7 +114,9 @@ test('native untrusted clock, foreign Alice address, changed channel and insuffi
 test('native policy cannot substitute mainnet, amount/fees, guest owner, external endpoints or unsafe storage', { skip: !linux }, async () => {
   const x = await fixture(); try {
     for (const patch of [{ mode: 'mainnet' }, { amountSats: 100000 }, { maxBlocks: 3 }, { routingFeeLimitSats: 10000 }, { ownerUsername: 'guest' },
-      { routing: { ...x.policy.routing, payerOrigin: 'https://external.example' } }]) assert.equal(ownedRuntimePolicySchema.safeParse({ ...x.policy, ...patch }).success, false);
+      { routing: { ...x.policy.routing, payerOrigin: 'https://external.example' } },
+      { credentialPaths: { ...x.policy.credentialPaths, providerInvoiceMacaroonPath: '/synthetic/uninspected-admin.macaroon' } }])
+      assert.equal(ownedRuntimePolicySchema.safeParse({ ...x.policy, ...patch }).success, false);
     await assert.rejects(createOwnedRuntimeFactory({ ...x.policy, backupsDirectory: x.policy.runsDirectory }, { get: async () => undefined, verifyCsrf: () => false }, x.io));
   } finally { await x.cleanup(); }
 });
@@ -125,6 +129,22 @@ test('a canceled unpaid invoice is definitively observed before its slot is rele
     await assert.rejects(runtime.authorize('review-canceled-invoice'));
     assert.equal(x.counts().creates, 1); assert.equal(x.counts().actions, 0); await runtime.close();
   } finally { await x.cleanup(); }
+});
+
+test('unsupported, inconsistent or truncated payer history cannot grant execution or release a canceled invoice reservation', { skip: !linux }, async () => {
+  const row = { payment_hash: '11'.repeat(32), payment_index: '1' };
+  for (const history of [{ payments: [] }, { payments: [row], first_index_offset: '1', last_index_offset: '2' },
+    { payments: [row, row], first_index_offset: '1', last_index_offset: '1' },
+    { payments: Array.from({ length: 100 }, (_, i) => ({ ...row, payment_index: String(i + 1) })), first_index_offset: '1', last_index_offset: '100' }]) {
+    const x = await fixture(); try {
+      x.history(history); await assert.rejects(x.factory.prepare('ab'.repeat(32), x.entry));
+      assert.equal(x.counts().creates, 1); assert.equal(x.counts().actions, 0);
+      const recovered = await x.factory.restore('ab'.repeat(32), { ...x.entry, status: 'UNKNOWN' });
+      assert.ok(recovered); await assert.rejects(recovered.authorize('cannot-review-uncertain-history'));
+      assert.equal(recovered.api.list(x.entry.ownerId)[0]!.allowedActions.includes('EXECUTE'), false);
+      x.cancel(); await assert.rejects(recovered.terminal()); await recovered.close();
+    } finally { await x.cleanup(); }
+  }
 });
 
 test('verified completed legacy run remains owner-visible as read-only history without copying custody or granting execution', { skip: !linux }, async () => {

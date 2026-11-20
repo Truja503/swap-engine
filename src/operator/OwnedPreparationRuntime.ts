@@ -24,13 +24,25 @@ import { createOwnedReverseApi, sessionOwnerAuthenticator, type OwnerSessions } 
 import { PreparationRejected, type PreparationFactory, type PreparationEntry, type PreparedRuntime } from '../api/ownedPreparation.js';
 
 const absolute = z.string().refine(isAbsolute);
+const historyInteger = z.string().regex(/^(0|[1-9][0-9]{0,19})$/).refine(v => BigInt(v) <= 0xffffffffffffffffn);
+const payerHistorySchema = z.object({ first_index_offset: historyInteger, last_index_offset: historyInteger,
+  payments: z.array(z.object({ payment_hash: z.string().regex(/^[a-f0-9]{64}$/), payment_index: historyInteger })).max(100) });
+function verifyAbsentHistory(value: unknown, hash: string) {
+  const page = payerHistorySchema.parse(value);
+  if (page.payments.length === 100 || page.payments.some(p => p.payment_hash === hash)) throw operatorStopped();
+  if (!page.payments.length) {
+    if (page.first_index_offset !== '0' || page.last_index_offset !== '0') throw operatorStopped();
+  } else if (page.first_index_offset !== page.payments[0]!.payment_index || page.last_index_offset !== page.payments.at(-1)!.payment_index ||
+    page.payments.some((p, i) => BigInt(p.payment_index) < 1n || (i > 0 && BigInt(p.payment_index) <= BigInt(page.payments[i - 1]!.payment_index)))) throw operatorStopped();
+}
 export const ownedRuntimePolicySchema = ownedRunPolicySchema.omit({ backupDirectory: true, tipHeight: true, input: true }).extend({
   mode: z.literal('regtest'), runsDirectory: absolute, backupsDirectory: absolute, passwordPath: absolute,
   actions: actionPathsSchema, amountSats: z.literal(50000), invoiceSats: z.literal(50750),
   fundingFeeLimitSats: z.literal(1000), routingFeeLimitSats: z.literal(100), claimFeeSats: z.literal(500),
   maxBlocks: z.literal(2), maxInputSats: z.number().int().min(61000).max(Number.MAX_SAFE_INTEGER),
   archives: z.array(z.object({ directory: absolute, specSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(20).default([]),
-}).strict();
+}).strict().refine(p => p.actions.providerSettleMacaroonPath === p.credentialPaths.providerInvoiceMacaroonPath,
+  'Invoice creation must use the same inspected invoices-only credential');
 export type OwnedRuntimePolicy = z.infer<typeof ownedRuntimePolicySchema>;
 const clockSynchronized = async () => {
   const { stdout } = await promisify(execFile)('/usr/bin/timedatectl', ['show', '-p', 'NTPSynchronized', '--value'], { timeout: 5000, maxBuffer: 1024 });
@@ -169,8 +181,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
         if (Object.keys(before.jitExecutions ?? {}).length || Object.keys(before.controlledExecutions ?? {}).length ||
           Object.values(before.ownedReverse?.requests ?? {}).some(r => r.kind === 'EXECUTE')) throw operatorStopped();
         // Prove complete payer history has no matching payment before granting a new unused envelope.
-        const history = z.object({ payments: z.array(z.object({ payment_hash: z.string() })).max(100) }).parse(await clients.recoveryPayer.call(recoveryPaymentsPath));
-        if (history.payments.length === 100 || history.payments.some(p => p.payment_hash === spec.client.paymentHash)) throw operatorStopped();
+        verifyAbsentHistory(await clients.recoveryPayer.call(recoveryPaymentsPath), spec.client.paymentHash);
         client ??= await SecretVault.open(join(directory, 'client-secrets'), password); refund ??= await SecretVault.open(join(directory, 'provider-refund-keys'), password);
         await verifyCustodyBackup(directory, spec, backup, password);
         const readers = createLndJitReaders(current, spec, { ...clients, custody: persistedReadinessCustody(client, new RefundKeyVault(refund)) });
@@ -208,8 +219,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
           await assertRecoveryNode(clients.recoveryPayer, spec.payerNode);
           const invoice = await clients.provider.lookup(spec.client.paymentHash);
           if (invoice.state !== 'CANCELED' || invoice.amt_paid_sat !== '0' || invoice.htlcs?.length) return;
-          const history = z.object({ payments: z.array(z.object({ payment_hash: z.string() })).max(100) }).parse(await clients.recoveryPayer.call(recoveryPaymentsPath));
-          if (history.payments.length === 100 || history.payments.some(p => p.payment_hash === spec.client.paymentHash)) return;
+          verifyAbsentHistory(await clients.recoveryPayer.call(recoveryPaymentsPath), spec.client.paymentHash);
           api.revokeUnusedApproval(swapId); approvedUntil = 0; return 'EXPIRED';
         },
         close() { return shutdown ??= (async () => { stop(); await api.drain(); await underlying?.catch(() => {}); client?.close(); refund?.close(); await current.close(); opened.delete(runtime); })(); },

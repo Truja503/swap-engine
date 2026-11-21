@@ -1,0 +1,61 @@
+name: Ark lab regtest (opt-in)
+on:
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Run the isolated Bitcoin/Arkade regtest stack'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  ark-e2e:
+    if: inputs.run_e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install repository Rust toolchain
+        run: rustup show
+        working-directory: ark
+      - name: Start and verify dedicated stack
+        run: |
+          npm run ark:start
+          npm run ark:status
+      - name: Run live regtest matrix
+        run: npm run ark:test -- --e2e
+      - name: Stop stack without deleting state
+        if: always()
+        run: npm run ark:stop
+      - name: Validate public E2E evidence before upload
+        if: always()
+        run: |
+          for file in matrix.json boarding.json transfer.json offboard.json renewal.json; do
+            path="data/ark/e2e/evidence/$file"
+            [ -f "$path" ] || continue
+            jq -e 'type == "object"' "$path" >/dev/null
+            if grep -Eqi '(mnemonic|xprv|private_key|rpcpassword|ark_lab_|-----begin)' "$path"; then
+              echo "Unexpected sensitive token in $path" >&2
+              exit 1
+            fi
+          done
+      - name: Upload only public evidence (no data directories or service logs)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ark-regtest-public-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            data/ark/e2e/evidence/matrix.json
+            data/ark/e2e/evidence/boarding.json
+            data/ark/e2e/evidence/transfer.json
+            data/ark/e2e/evidence/offboard.json
+            data/ark/e2e/evidence/renewal.json

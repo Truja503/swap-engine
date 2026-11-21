@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc --noEmit && npm run build:web",
     "test": "tsx --test tests/*.test.ts",
@@ -16,13 +18,13 @@
     "build:web": "node src/web/build.mjs",
     "prestart": "npm run build:web",
     "pretest": "npm run build:web",
-    "test:web": "npm run build:web && tsx --test tests/browser/web.test.ts"
+    "test:web": "npm run build:web && tsx --test tests/browser/*.test.ts"
   },
   "dependencies": {
-    "bitcoinjs-lib": "7.0.0",
-    "ecpair": "3.0.0",
+    "bitcoinjs-lib": "7.0.5",
+    "ecpair": "3.0.2",
     "tiny-secp256k1": "2.2.4",
-    "zod": "4.1.12"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@fontsource-variable/manrope": "5.3.0",

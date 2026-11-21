@@ -204,7 +204,7 @@ test('regtest page renders a real preflight 503 report with offline test ports',
   await page.screenshot({ path: 'dist/web-verification/admin.png', fullPage: true });
 });
 
-test('administrator balances show wallet and channel snapshots, distinguish zero from unknown, and clear on denial', async context => {
+test('administrator wallets show four batteries with separate on-chain and Lightning scales', async context => {
   const f = await setup();
   context.after(f.cleanup);
   const server = createApi(f.manager, async () => { throw new Error('Offline test port'); }, undefined, 'regtest');
@@ -214,36 +214,86 @@ test('administrator balances show wallet and channel snapshots, distinguish zero
   const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
   context.after(() => browser.close());
   const page = await browser.newPage({ reducedMotion: 'reduce' });
+  await page.clock.install();
   await page.route('**/v1/auth/session', route => route.fulfill({ json: session('ADMIN') }));
   let denied = false;
-  const capturedAt = '2026-11-18T06:20:00.000Z';
-  await page.route('**/v1/operations/balances', route => denied
-    ? route.fulfill({ status: 403, json: { error: 'FORBIDDEN' } })
-    : route.fulfill({ json: {
+  let zeroSnapshot = false;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  const capturedAt = new Date(Date.now() - 20_000).toISOString();
+  await page.route('**/v1/operations/balances', async route => {
+    if (denied) return route.fulfill({ status: 403, json: { error: 'FORBIDDEN' } });
+    if (zeroSnapshot) {
+      await refreshGate;
+      return route.fulfill({ json: {
+        network: 'regtest', capturedAt: new Date().toISOString(),
+        core: { confirmedSats: 0, unconfirmedSats: 100_000 },
+        provider: { confirmedSats: 0, unconfirmedSats: 0, localSats: 900_000, remoteSats: 1 },
+        alice: { confirmedSats: null, unconfirmedSats: null, localSats: 0, remoteSats: 0 },
+      } });
+    }
+    return route.fulfill({ json: {
       network: 'regtest', capturedAt,
       core: { confirmedSats: 100_000, unconfirmedSats: 0 },
-      provider: { confirmedSats: 52_000, unconfirmedSats: null, localSats: 0, remoteSats: 21_000 },
-      alice: { confirmedSats: 0, unconfirmedSats: 925, localSats: null, remoteSats: 0 },
-    } }));
+      provider: { confirmedSats: 520_000, unconfirmedSats: null, localSats: 7_000, remoteSats: 21_000 },
+      alice: { confirmedSats: 25_000, unconfirmedSats: 925, localSats: null, remoteSats: 0 },
+    } });
+  });
   await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/#operations`);
   await page.getByText('Regtest snapshot', { exact: true }).waitFor();
+  assert.deepEqual(await page.locator('#balance-piles .wallet-pile').evaluateAll(piles => piles.map(pile => pile.id)),
+    ['core-pile', 'provider-lightning-pile', 'alice-lightning-pile', 'alice-pile']);
+  assert.equal(await page.getByText('520,000 sats', { exact: true }).count(), 0);
   for (const [id, amount] of Object.entries({
     'core-confirmed': '100,000 sats', 'core-unconfirmed': '0 sats',
-    'provider-confirmed': '52,000 sats', 'provider-unconfirmed': 'Unavailable',
-    'provider-local': '0 sats', 'provider-remote': '21,000 sats',
-    'alice-confirmed': '0 sats', 'alice-unconfirmed': '925 sats',
-    'alice-local': 'Unavailable', 'alice-remote': '0 sats',
+    'provider-local': '7,000 sats', 'provider-remote': '21,000 sats', 'provider-capacity': '28,000 sats',
+    'alice-confirmed': '25,000 sats', 'alice-unconfirmed': '925 sats',
+    'alice-local': 'Unavailable', 'alice-remote': '0 sats', 'alice-capacity': 'Unavailable',
   })) {
     assert.equal(await page.locator('#' + id).textContent(), amount);
   }
+  const fill = (id: string) => page.locator('#' + id + '-pile').evaluate(pile => (pile as HTMLElement).style.getPropertyValue('--wallet-fill'));
+  assert.equal(await fill('core'), '100%');
+  assert.equal(await fill('provider-lightning'), '25%');
+  assert.equal(await page.locator('#provider-lightning-pile').getAttribute('data-capacity'), '');
+  assert.equal(await fill('alice-lightning'), '');
+  assert.equal(await page.locator('#alice-lightning-pile').getAttribute('data-state'), 'unavailable');
+  assert.equal(await fill('alice'), '25%');
+  assert.equal(await page.locator('#alice-pile').getAttribute('data-state'), 'known');
+  await page.getByText(/relative to the larger known confirmed balance/).waitFor();
+  await page.getByText(/reported local \+ remote capacity/).waitFor();
   assert.equal(await page.locator('#balance-time').getAttribute('datetime'), capturedAt);
   await audit(page);
   await page.screenshot({ path: evidence + '/operations-balances.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: evidence + '/operations-balances-mobile.png', fullPage: true });
+  await page.clock.fastForward(41_000);
+  await page.getByText('Regtest snapshot · at least 1 minute old', { exact: true }).waitFor();
+  assert.equal(await page.locator('#balance-piles').getAttribute('data-stale'), '');
+  assert.equal(await page.locator('#core-confirmed').textContent(), '100,000 sats');
+  const refresh = page.getByRole('button', { name: 'Refresh balances', exact: true });
+  zeroSnapshot = true;
+  await refresh.click();
+  await page.getByText('Loading balances…', { exact: true }).waitFor();
+  assert.equal(await page.locator('#core-pile').getAttribute('data-state'), 'loading');
+  assert.equal(await fill('provider-lightning'), '');
+  releaseRefresh();
+  await page.getByText('Regtest snapshot', { exact: true }).waitFor();
+  assert.equal(await page.locator('#core-pile').getAttribute('data-state'), 'known');
+  assert.equal(await page.locator('#alice-pile').getAttribute('data-state'), 'unavailable');
+  assert.equal(await page.locator('#core-confirmed').textContent(), '0 sats');
+  assert.equal(await page.locator('#core-unconfirmed').textContent(), '100,000 sats');
+  assert.equal(await page.locator('#provider-local').textContent(), '900,000 sats');
+  assert.equal(await page.locator('#provider-capacity').textContent(), '900,001 sats');
+  assert.equal(await page.locator('#alice-capacity').textContent(), '0 sats');
+  assert.equal(await page.locator('#alice-lightning-pile').getAttribute('data-capacity'), null);
+  assert.equal(await fill('core'), '0%');
+  assert.equal(await fill('alice-lightning'), '0%');
+  assert.equal(await fill('alice'), '');
+  assert.equal(await page.locator('#balance-piles').getAttribute('data-stale'), null);
   denied = true;
-  await page.getByRole('button', { name: 'Refresh balances', exact: true }).click();
+  await refresh.click();
   await page.getByText('Balance snapshot unavailable.', { exact: true }).waitFor();
   assert.equal(await page.locator('#provider-remote').textContent(), 'Unavailable');
   assert.equal(await page.locator('#balance-time').isVisible(), false);
@@ -388,6 +438,127 @@ test('login success requires independent session verification and logout is CSRF
   assert.equal(await page.locator('#account-dashboard').isVisible(), false);
   const local = await page.evaluate(() => [localStorage.length, sessionStorage.length]);
   assert.deepEqual(local, [0, 0]);
+});
+
+test('prepared swaps use verified terms, durable idempotency and separate reconciliation', async context => {
+  const f = await setup();
+  context.after(f.cleanup);
+  const server = createApi(f.manager, async () => { throw new Error('Offline test port'); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  context.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const browser = await chromium.launch({ channel: process.env.WEB_TEST_BROWSER_CHANNEL });
+  context.after(() => browser.close());
+  const page = await browser.newPage({ reducedMotion: 'reduce' });
+  const id = '5f962d5f-1fed-43f2-9d66-f0ccfca6595f';
+  const quoteId = 'baaba8fe-d8db-483f-9599-011fa774ba61';
+  const destination = 'bcrt1q8dfp6nje5y8zjpsmjevlecq8f6plqfhmnhqxgq';
+  const approvedUntil = Date.now() + 120_000;
+  const expiresAt = Date.now() - 600_000;
+  const captured: Array<{ key: string; csrf: string; body: unknown; authorization?: string }> = [];
+  const quotes: string[] = [];
+  let revision = 7;
+  let enabled = false;
+  let recovering = false;
+  let completed = false;
+  const snapshot = () => ({
+    network: 'regtest', id, revision, claimDestination: destination,
+    state: completed ? 'COMPLETED' : 'INVOICE_CREATED',
+    quote: {
+      id: quoteId, expiresAt,
+      amountSats: 50_000, serviceFeeSats: 750, invoiceSats: 50_750, fundingReserveSats: 1000, claimFeeSats: 500,
+    },
+    payment: { status: completed ? 'SUCCEEDED' : 'NOT_STARTED', feeSats: completed ? 0 : null, valueSats: 50_750 },
+    funding: { txid: completed ? 'a'.repeat(64) : null, feeSats: completed ? 247 : null },
+    claim: { txid: completed ? 'b'.repeat(64) : null, feeSats: 500, netSats: 49_500 },
+    execution: { status: completed ? 'COMPLETED' : recovering ? 'RECONCILIATION_REQUIRED' : 'NOT_STARTED', approvedUntil },
+    allowedActions: completed ? [] : recovering ? ['RECONCILE'] : ['EXECUTE'],
+  });
+  await page.route('**/v1/auth/session', route => route.fulfill({ json: session('USER') }));
+  await page.route('**/v1/reverse/availability', route => route.fulfill({ json: {
+    network: 'regtest', liveSwapsEnabled: false, controlledReverseConfigured: true,
+    executionAvailable: enabled && !recovering && !completed, recoveryAvailable: true, preparedSwapIds: [id],
+  } }));
+  await page.route('**/v1/quotes', route => {
+    quotes.push(route.request().method());
+    return route.fulfill({ status: 409, json: { error: 'USE_PREPARED_SWAP' } });
+  });
+  await page.route('**/v1/swaps', route => route.fulfill({ json: { network: 'regtest', swaps: [snapshot()] } }));
+  await page.route('**/v1/swaps/' + id, route => route.fulfill({ json: snapshot() }));
+  await page.route('**/v1/swaps/reverse', route => {
+    const headers = route.request().headers();
+    captured.push({ key: headers['idempotency-key']!, csrf: headers['x-csrf-token']!,
+      body: route.request().postDataJSON(), authorization: headers.authorization });
+    if (captured.length === 1) return route.abort('failed');
+    recovering = captured.length === 2;
+    return route.fulfill({ status: 202, json: {
+      operationId: 'c'.repeat(64), statusUrl: '/v1/swaps/' + id, status: recovering ? 'RECONCILIATION_REQUIRED' : 'RUNNING',
+    } });
+  });
+  await page.route('**/v1/swaps/' + id + '/reconcile', route => {
+    const headers = route.request().headers();
+    captured.push({ key: headers['idempotency-key']!, csrf: headers['x-csrf-token']!,
+      body: route.request().postDataJSON(), authorization: headers.authorization });
+    completed = true;
+    revision++;
+    return route.fulfill({ json: { operationId: 'd'.repeat(64), statusUrl: '/v1/swaps/' + id,
+      status: 'SUCCEEDED', result: { id, state: 'COMPLETED', revision, next: 'DONE' } } });
+  });
+
+  await page.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port + '/');
+  const preparedLink = page.getByRole('link', { name: 'Review prepared swaps' });
+  await preparedLink.waitFor();
+  await page.getByRole('button', { name: 'SWAP', exact: true }).click();
+  const review = page.getByRole('button', { name: 'Review prepared swap', exact: true });
+  await page.getByText('Swap status only. Execution unavailable.').waitFor();
+  assert.equal(await review.isDisabled(), true);
+  enabled = true;
+  await page.getByRole('button', { name: 'Refresh status' }).click();
+  await page.getByText('Prepared swap available for review.').waitFor();
+  await review.click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm prepared swap' });
+  const confirm = dialog.getByRole('button', { name: 'Start prepared swap' });
+  await dialog.getByText(destination, { exact: true }).waitFor();
+  await dialog.getByText('Prepared quote expiry', { exact: true }).waitFor();
+  await dialog.getByText('Execution approval deadline', { exact: true }).waitFor();
+  await dialog.getByText('50,750 sats', { exact: true }).waitFor();
+  await page.screenshot({ path: evidence + '/prepared-swap-review.png' });
+  assert.equal(captured.length, 0);
+  revision++;
+  await confirm.click();
+  await page.getByText('Swap terms or authorization changed. Review the latest status.', { exact: true }).waitFor();
+  assert.equal(captured.length, 0);
+  await review.click();
+  await confirm.click();
+  await page.getByText('Result uncertain. Refresh the swap status before retrying.', { exact: true }).waitFor();
+  assert.deepEqual(captured[0]?.body, { preparedSwapId: id, expectedRevision: 8 });
+  assert.match(captured[0]!.key, /^[A-Za-z0-9_-]{8,128}$/);
+  assert.equal(captured[0]?.csrf, 'test-csrf');
+  assert.equal(captured[0]?.authorization, undefined);
+  const intent = await page.evaluate(() => {
+    const entry = Object.keys(localStorage).find(key => key.endsWith('.execute.once'));
+    return entry ? JSON.parse(localStorage.getItem(entry)!) : null;
+  });
+  assert.deepEqual(intent, { key: captured[0]!.key, body: captured[0]!.body });
+
+  await page.reload();
+  await review.click();
+  await confirm.click();
+  await page.getByText('Result uncertain. Check recovery evidence when available.', { exact: true }).waitFor();
+  assert.deepEqual(captured[1], captured[0]);
+  assert.equal(await review.isDisabled(), true);
+  await page.getByRole('button', { name: 'Check recovery evidence' }).click();
+  await page.getByText('Recovery evidence is complete.', { exact: true }).waitFor();
+  await page.getByText('Swap completed', { exact: true }).waitFor();
+  await page.getByText('b'.repeat(64), { exact: true }).waitFor();
+  assert.notEqual(captured[2]?.key, captured[0]?.key);
+  assert.equal(captured[2]?.csrf, 'test-csrf');
+  assert.deepEqual(captured[2]?.body, { expectedRevision: 8 });
+  assert.deepEqual(quotes, []);
+  await audit(page);
+  await page.screenshot({ path: evidence + '/prepared-swap-status.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 });
 
 test('opening fills the viewport, draws six lines, fades and sequences a 3D entrance', async context => {

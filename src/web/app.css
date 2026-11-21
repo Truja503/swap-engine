@@ -93,17 +93,50 @@ h2 { font-size: 1.15rem; font-weight: 720; letter-spacing: -.035em; }
 .balance-meta time { color: var(--muted); font: 400 .74rem/1.4 var(--mono); }
 .balance-group { margin-top: 17px; }
 .balance-group h3 { margin: 0 0 8px; font-size: .88rem; font-weight: 740; }
-.balance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 185px), 1fr)); gap: 8px; }
+.balance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .balance-node { min-width: 0; padding: 11px; border: 1px solid var(--stroke); border-radius: 4px; background: var(--inset); }
 .balance-node h4 { margin: 0 0 8px; font-size: .8rem; font-weight: 720; }
 .balance-node dl { display: grid; gap: 4px; }
 .balance-node dl div { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .balance-node dt { color: var(--muted); font-size: .73rem; }
 .balance-node dd { min-width: 0; font: 400 .73rem/1.45 var(--mono); text-align: right; overflow-wrap: anywhere; }
+.balance-scale { margin: -2px 0 9px; color: var(--muted); font-size: .73rem; }
+.balance-wallet { display: grid; grid-template-columns: 35px minmax(0, 1fr); column-gap: 11px; align-items: center; }
+.balance-wallet h4 { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 9px; }
+.balance-wallet h4 span { color: var(--muted); font: 400 .7rem var(--mono); }
+.wallet-pile {
+  position: relative; width: 31px; height: 52px; margin: 6px auto 2px; border: 1px solid #717171;
+  border-radius: 3px; background: #fff; box-shadow: 1px 2px 0 #dedede;
+}
+.wallet-pile::before {
+  content: ''; position: absolute; top: -5px; left: 9px; width: 11px; height: 4px;
+  border: 1px solid #717171; border-bottom: 0; border-radius: 2px 2px 0 0; background: #f0f0f0;
+}
+.wallet-pile span { position: absolute; inset: 3px; overflow: hidden; border-radius: 1px; }
+.wallet-pile span::before {
+  content: ''; position: absolute; inset: auto 0 0; height: var(--wallet-fill, 0%);
+  background: var(--black-glass); transition: height 250ms ease-in-out;
+}
+.wallet-pile span::after {
+  content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(to top, transparent 0 7px, #92929255 7px 8px);
+}
+.wallet-pile-lightning[data-capacity] span { background: #bababa; }
+.wallet-pile[data-state="unavailable"] { border-style: dashed; }
+.wallet-pile[data-state="unavailable"] span::after {
+  background: repeating-linear-gradient(135deg, transparent 0 3px, #dedede 3px 4px);
+}
+.wallet-pile[data-state="loading"] span::after { background: #ececec; }
+.balance-group[data-stale] .wallet-pile { opacity: .62; }
 .blockers { padding-inline-start: 22px; font-size: .84rem; color: var(--muted); }
 .details { display: grid; gap: 6px; padding-block: 10px; }
 .details div { border-bottom: 1px solid var(--stroke); padding-bottom: 6px; }
 .details dd { min-width: 0; max-width: 68%; }
+.prepared-link { position: relative; justify-self: center; margin-top: 20px; }
+#track { width: 100%; }
+.owned-toolbar, .owned-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 14px; }
+.owned-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.owned-toolbar > div { flex: 1 1 230px; min-width: 0; }
+.owned-toolbar select { width: 100%; min-height: 42px; padding: 7px 10px; border: 1px solid #aaa; border-radius: 4px; background: var(--inset); color: var(--text); }
 dialog { width: min(480px, calc(100% - 28px)); max-height: calc(100% - 28px); padding: 20px; color: var(--text); background: var(--surface); border: 1px solid #979797; border-radius: 6px; }
 dialog::backdrop { background: #16161670; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; }
@@ -113,6 +146,7 @@ dialog::backdrop { background: #16161670; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 @media (max-width: 460px) {
+  .balance-grid { grid-template-columns: minmax(0, 1fr); }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .details dd { max-width: 58%; }
 }

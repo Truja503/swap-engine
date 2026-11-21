@@ -95,14 +95,31 @@
         </div>
       </article>
       </form>
+      <a id="prepared-swap-link" class="text-link prepared-link" href="#track" hidden>Review prepared swaps</a>
     </div>
   </section>
 
   <section id="track" data-view hidden aria-labelledby="track-title" class="subpage">
     <h1 id="track-title" tabindex="-1">Swap status.</h1>
-    <article class="panel inset">
-      <div class="panel-header"><h2>Transaction lookup</h2><span class="tag">UNAVAILABLE</span></div>
-      <p class="muted">Transaction status requires verified swap ownership.</p>
+    <article id="owned-swap-panel" class="panel inset">
+      <div class="panel-header">
+        <h2>Transaction lookup</h2>
+        <div class="owned-header-actions">
+          <span id="owned-tag" class="tag">UNAVAILABLE</span>
+          <button id="owned-refresh" type="button" class="secondary" hidden>Refresh status</button>
+        </div>
+      </div>
+      <p id="owned-status" class="status" role="status">Transaction status requires verified swap ownership.</p>
+      <div id="owned-controls" hidden>
+        <div class="owned-toolbar">
+          <div><label for="prepared-swap">Prepared swap</label><select id="prepared-swap"></select></div>
+        </div>
+        <dl id="owned-evidence" class="details"></dl>
+        <div class="owned-actions">
+          <button id="owned-review" type="button" class="primary" disabled>Review prepared swap</button>
+          <button id="owned-reconcile" type="button" class="secondary" disabled>Check recovery evidence</button>
+        </div>
+      </div>
     </article>
   </section>
 
@@ -149,33 +166,30 @@
         <p class="status" id="balance-status" role="status">Balance snapshot unavailable.</p>
         <time id="balance-time" hidden></time>
       </div>
-      <section class="balance-group" aria-labelledby="onchain-balances-title">
-        <h3 id="onchain-balances-title">On-chain wallets</h3>
+      <section class="balance-group" id="balance-piles" aria-labelledby="balance-piles-title">
+        <h3 id="balance-piles-title">Wallet balances</h3>
+        <p class="balance-scale">On-chain fill is relative to the larger known confirmed balance shown here.</p>
+        <p class="balance-scale">Lightning fill uses each node’s reported local + remote capacity. Dark is local and gray is remote.</p>
         <div class="balance-grid">
-          <div class="balance-node">
-            <h4>Bitcoin Core</h4>
+          <div class="balance-node balance-wallet">
+            <h4>Bitcoin Core Provider <span>On-chain</span></h4>
+            <div class="wallet-pile" id="core-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
             <dl><div><dt>Confirmed</dt><dd id="core-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="core-unconfirmed">Unavailable</dd></div></dl>
           </div>
-          <div class="balance-node">
-            <h4>LND Provider</h4>
-            <dl><div><dt>Confirmed</dt><dd id="provider-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="provider-unconfirmed">Unavailable</dd></div></dl>
+          <div class="balance-node balance-wallet">
+            <h4>LND Provider <span>Lightning</span></h4>
+            <div class="wallet-pile wallet-pile-lightning" id="provider-lightning-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
+            <dl><div><dt>Local</dt><dd id="provider-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="provider-remote">Unavailable</dd></div><div><dt>Reported capacity</dt><dd id="provider-capacity">Unavailable</dd></div></dl>
           </div>
-          <div class="balance-node">
-            <h4>LND Alice</h4>
+          <div class="balance-node balance-wallet">
+            <h4>LND Alice <span>Lightning</span></h4>
+            <div class="wallet-pile wallet-pile-lightning" id="alice-lightning-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
+            <dl><div><dt>Local</dt><dd id="alice-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="alice-remote">Unavailable</dd></div><div><dt>Reported capacity</dt><dd id="alice-capacity">Unavailable</dd></div></dl>
+          </div>
+          <div class="balance-node balance-wallet">
+            <h4>LND Alice <span>On-chain</span></h4>
+            <div class="wallet-pile" id="alice-pile" data-state="unavailable" aria-hidden="true"><span></span></div>
             <dl><div><dt>Confirmed</dt><dd id="alice-confirmed">Unavailable</dd></div><div><dt>Unconfirmed</dt><dd id="alice-unconfirmed">Unavailable</dd></div></dl>
-          </div>
-        </div>
-      </section>
-      <section class="balance-group" aria-labelledby="channel-balances-title">
-        <h3 id="channel-balances-title">Lightning channels</h3>
-        <div class="balance-grid">
-          <div class="balance-node">
-            <h4>LND Provider</h4>
-            <dl><div><dt>Local</dt><dd id="provider-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="provider-remote">Unavailable</dd></div></dl>
-          </div>
-          <div class="balance-node">
-            <h4>LND Alice</h4>
-            <dl><div><dt>Local</dt><dd id="alice-local">Unavailable</dd></div><div><dt>Remote</dt><dd id="alice-remote">Unavailable</dd></div></dl>
           </div>
         </div>
       </section>
@@ -216,6 +230,15 @@
   <dl class="details" id="review-details"></dl>
   <p id="execution-status" class="muted">Execution disabled.</p>
   <form class="dialog-actions" method="dialog"><button class="secondary" type="button" disabled>Start swap</button><button class="primary" autofocus>Close review</button></form>
+</dialog>
+<dialog id="owned-review-dialog" aria-labelledby="owned-review-title">
+  <h2 id="owned-review-title">Confirm prepared swap</h2>
+  <dl id="owned-review-details" class="details"></dl>
+  <p class="status">Regtest only. Execution uses a fresh quote with the prepared terms.</p>
+  <div class="dialog-actions">
+    <form method="dialog"><button type="submit" class="secondary" autofocus>Cancel</button></form>
+    <button id="owned-confirm" type="button" class="primary" disabled>Start prepared swap</button>
+  </div>
 </dialog>
 </body>
 </html>

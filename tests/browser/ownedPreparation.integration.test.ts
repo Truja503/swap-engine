@@ -66,7 +66,8 @@ test('SWAP prepares/reviews once, pays only after Start, then a second explicit 
     const review = page.getByRole('dialog', { name: 'Confirm prepared swap' });
     try { await review.waitFor({ state: 'visible', timeout: 10000 }); }
     catch { throw new Error(`Review did not open: ${await page.locator('#quote-status').textContent()} / ${await page.locator('#owned-status').textContent()}`); }
-    const text = await review.textContent(); for (const value of ['50,000', '48,750', '1,000', '100', f.spec.claimDestination]) assert.ok(text?.includes(value));
+    const text = await review.textContent(); for (const value of ['50,000', '48,750', '1,000', f.spec.claimDestination]) assert.ok(text?.includes(value));
+    assert.match(text ?? '', /Maximum routing fee\s*0 sats/);
     assert.equal(creates, 1); assert.equal(f.posts(), 1); assert.equal(executes, 0);
     await page.reload(); await page.locator('#owned-controls').waitFor({ state: 'visible' });
     await page.getByRole('link', { name: 'Swap', exact: true }).click();

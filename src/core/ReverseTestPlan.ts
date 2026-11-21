@@ -26,7 +26,7 @@ export const reverseTestPlanSchema = z.object({ network: z.literal('regtest'), w
   quote: z.object({ id: z.uuid(), amountSats: amount, serviceFeeSats: amount, invoiceSats: amount,
     fundingReserveSats: amount, claimFeeSats: amount, expiresAt: amount }).strict(),
   invoiceExpirySeconds: z.literal(3600), invoiceCltvDelta: z.literal(80),
-  routingFeeLimitSats: z.literal(100), fundingFeeLimitSats: z.literal(1000),
+  routingFeeLimitSats: z.union([z.literal(0), z.literal(100)]), fundingFeeLimitSats: z.literal(1000),
   executionApproved: z.literal(false),
 }).strict();
 export type ReverseTestPlan = z.infer<typeof reverseTestPlanSchema>;
@@ -37,7 +37,7 @@ export function verifyReverseTestPlan(value: unknown): ReverseTestPlan {
   const legacy = plan.quote.amountSats === 50000 && plan.quote.invoiceSats === 50750 && plan.quote.serviceFeeSats === 750;
   let current = false;
   try { const budget = invoiceBudget(plan.quote.invoiceSats); current = Object.entries(budget).every(([key, value]) => plan.quote[key as keyof typeof budget] === value); } catch { /* Invalid budgets remain rejected. */ }
-  if ((!legacy && !current) || plan.quote.claimFeeSats !== 500 ||
+  if ((!legacy && !current) || plan.routingFeeLimitSats !== (legacy ? 100 : 0) || plan.quote.claimFeeSats !== 500 ||
     plan.quote.fundingReserveSats !== plan.fundingFeeLimitSats || plan.contract.timeoutHeight !== plan.tipHeight + 30 ||
     plan.providerNode === plan.payerNode || plan.routing.providerOrigin === plan.routing.payerOrigin) throw new Error('Reverse plan differs from test contract');
   const contract = buildHtlc(plan.contract);
@@ -55,5 +55,5 @@ export function createReverseTestPlan(quote: Quote, tipHeight: number, client: {
   return verifyReverseTestPlan({ network: 'regtest', wallet: 'lqwd-lab', createdAt: Date.now(), tipHeight,
     providerNode: nodes.provider, payerNode: nodes.payer, routing, claimDestination: destinations.claim, refundDestination: destinations.refund,
     contract, address: htlc.address, witnessScript: htlc.witnessScript.toString('hex'), quote,
-    invoiceExpirySeconds: 3600, invoiceCltvDelta: 80, routingFeeLimitSats: 100, fundingFeeLimitSats: 1000, executionApproved: false });
+    invoiceExpirySeconds: 3600, invoiceCltvDelta: 80, routingFeeLimitSats: quote.invoiceSats === 50750 ? 100 : 0, fundingFeeLimitSats: 1000, executionApproved: false });
 }

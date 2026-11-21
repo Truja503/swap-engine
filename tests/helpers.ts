@@ -55,10 +55,11 @@ export function fixture() {
   return { claimKey, refundKey, preimage, contract, htlc, tx, destination,
     spend: { contract, lockupTxHex: tx.toHex(), vout: 0, destination, feeSats: 500, privateKey: claimKey.privateKey! } };
 }
-export async function setup() {
+export async function setup(sourceAmountSats?: number) {
   const directory = await privateTestDirectory('fixture');
   const store = await Store.open(directory); const manager = new SwapManager(store); const f = fixture();
-  const quote = await manager.quote(50_000);
+  const quote = sourceAmountSats === undefined ? await manager.quote(50_000) : await manager.quoteInvoice(sourceAmountSats);
+  if (sourceAmountSats !== undefined) { f.tx.outs[0]!.value = BigInt(quote.amountSats); f.spend.lockupTxHex = f.tx.toHex(); }
   const swap = await manager.create(quote.id, 'request-1234', f.contract, 100, { onchainSats: 1_000_000, incomingSats: 1_000_000 });
   let invoiceState: Invoice['state'] = 'ACCEPTED';
   const ledger = new Map<string, { hex: string; confirmations: number }>();

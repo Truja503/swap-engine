@@ -111,6 +111,7 @@ export function createControlledReverseBackend(store: Store, suppliedPlan: Rever
           cancel: async () => { throw new Error('Execution cannot cancel or refund automatically'); } };
         const result = await runControlledReverse(store, ports, {
           claimDestination: plan.claimDestination,
+          routingFeeLimitSats: plan.routingFeeLimitSats,
           startPayment: swap => { activeApproval(); return runtime.controls.startPayment(swap); },
           waitAccepted: swap => runtime.controls.waitAccepted(swap),
           signClaim: swap => { activeApproval(); return runtime.controls.signClaim(swap); },

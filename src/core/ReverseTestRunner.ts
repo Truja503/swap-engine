@@ -8,6 +8,7 @@ import { verifyHtlcSpend } from '../bitcoin/SpendEvidence.js';
 export type PaymentEvidence = { hash: string; status: 'SUCCEEDED'; valueSats: number; feeSats: number };
 export interface ReverseTestControls {
   claimDestination: string;
+  routingFeeLimitSats?: 0 | 100;
   startPayment(swap: Swap): Promise<{ result: Promise<PaymentEvidence>; stopClient(): void }>;
   waitAccepted(swap: Swap): Promise<void>;
   mineFor(txid: string): Promise<void>;
@@ -87,7 +88,8 @@ export async function runControlledReverse(store: Store, ports: SwapPorts, contr
   }
   const tip = await ports.tip();
   if (!Number.isSafeInteger(tip) || tip < 0 || tip > initial.contract.timeoutHeight - 10) throw new Error('Insufficient on-chain claim window before payment');
-  let owned = await updateSwapRevision(store, id, initial.revision, s => { s.clientPayment = { hash: initial.contract.paymentHash, status: 'INTENT', feeLimitSats: 100 }; });
+  const feeLimitSats = controls.routingFeeLimitSats ?? 100;
+  let owned = await updateSwapRevision(store, id, initial.revision, s => { s.clientPayment = { hash: initial.contract.paymentHash, status: 'INTENT', feeLimitSats }; });
   const journal = async (fn: (swap: Swap) => void) => { owned = await updateSwapRevision(store, id, owned.revision, fn); return owned; };
   const mine = async (txid: string) => {
     const fromHeight = await ports.tip();
@@ -132,7 +134,7 @@ export async function runControlledReverse(store: Store, ports: SwapPorts, contr
     if (store.read().swaps[id]!.state !== 'LIGHTNING_SETTLED') throw new Error('Provider settlement not observed');
     const paid = await payment.result;
     if (paid.status !== 'SUCCEEDED' || paid.hash !== initial.contract.paymentHash || paid.valueSats !== initial.quote.invoiceSats ||
-      !Number.isSafeInteger(paid.feeSats) || paid.feeSats < 0 || paid.feeSats > 100) throw new Error('Payer completion evidence invalid');
+      !Number.isSafeInteger(paid.feeSats) || paid.feeSats < 0 || paid.feeSats > feeLimitSats) throw new Error('Payer completion evidence invalid');
     await journal(s => { const p = s.clientPayment!; p.status = 'SUCCEEDED'; p.feeSats = paid.feeSats; });
     const complete = await coordinator.complete(id);
     if (complete.state !== 'COMPLETED') throw new Error('Final confirmation/settlement evidence missing');

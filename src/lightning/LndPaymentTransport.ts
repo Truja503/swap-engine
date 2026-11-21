@@ -35,7 +35,7 @@ export class HttpsLndPaymentTransport implements PaymentStreamTransport {
   }
   stream(path: string, body: unknown | undefined, onPayment: (payment: unknown) => boolean, signal: AbortSignal, beforeRequest?: () => void | Promise<void>): Promise<void> {
     const parsedBody = z.object({ payment_request: z.string().regex(/^lnbcrt[0-9a-z]{20,4096}$/),
-      timeout_seconds: z.literal(60), fee_limit_sat: z.literal('100'), max_parts: z.literal(16),
+      timeout_seconds: z.literal(60), fee_limit_sat: z.enum(['0', '100']), max_parts: z.literal(16),
       outgoing_chan_ids: z.array(z.string().regex(/^[1-9][0-9]{0,19}$/).refine(v => BigInt(v) <= 0xffffffffffffffffn)).length(1),
       no_inflight_updates: z.literal(false), allow_self_payment: z.literal(false), amp: z.literal(false), cancelable: z.literal(false) }).strict().safeParse(body);
     let allowed = path === '/v2/router/send' && parsedBody.success;

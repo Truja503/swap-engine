@@ -20,8 +20,8 @@ import type { PaymentStreamTransport } from '../src/lightning/LndPaymentTranspor
 import { recoveryRoutedPaymentsPath } from '../src/lightning/LndPayerRecovery.js';
 
 // All transports, credentials and custody below are synthetic. No sockets or real vaults.
-async function fixture() {
-  const f = await setup(); let store = f.store; let tip = 100;
+async function fixture(sourceAmountSats?: number) {
+  const f = await setup(sourceAmountSats); let store = f.store; let tip = 100;
   const invoice = 'lnbcrt' + 'a'.repeat(30);
   f.ports.createInvoice = async () => invoice;
   await new SwapCoordinator(store, f.ports).issueInvoice(f.swap.id);
@@ -53,13 +53,13 @@ async function fixture() {
     chan_id: plan.routing.channelId, channel_point: plan.routing.channelPoint, capacity: '5000000', local_balance: local, remote_balance: remote,
     commit_fee: '1000', unsettled_balance: '0', pending_htlcs: [], local_constraints: limits, remote_constraints: limits, zero_conf: false });
   const invoiceWire = () => ({ state, payment_request: invoice, r_hash: Buffer.from(plan.contract.paymentHash, 'hex').toString('base64'),
-    value: '50750', amt_paid_sat: state === 'OPEN' ? '0' : '50750',
-    htlcs: state === 'OPEN' ? [] : [{ state: state === 'SETTLED' ? 'SETTLED' : 'ACCEPTED', expiry_height: 210, amt_msat: '50750000' }] });
+    value: String(plan.quote.invoiceSats), amt_paid_sat: state === 'OPEN' ? '0' : String(plan.quote.invoiceSats),
+    htlcs: state === 'OPEN' ? [] : [{ state: state === 'SETTLED' ? 'SETTLED' : 'ACCEPTED', expiry_height: 210, amt_msat: String(plan.quote.invoiceSats * 1000) }] });
   const paymentWire = () => ({ payment_hash: plan.contract.paymentHash, status: state === 'SETTLED' ? 'SUCCEEDED' : 'IN_FLIGHT',
-    payment_index: '1', value_sat: '50750', value_msat: '50750000', fee_sat: '0', fee_msat: '0', failure_reason: 'FAILURE_REASON_NONE',
+    payment_index: '1', value_sat: String(plan.quote.invoiceSats), value_msat: String(plan.quote.invoiceSats * 1000), fee_sat: '0', fee_msat: '0', failure_reason: 'FAILURE_REASON_NONE',
     ...(state === 'SETTLED' ? { payment_preimage: f.preimage } : {}), htlcs: [{ attempt_id: '1', status: state === 'SETTLED' ? 'SUCCEEDED' : 'IN_FLIGHT',
-      route: { total_amt_msat: '50750000', total_fees_msat: '0', hops: [{ chan_id: plan.routing.channelId, pub_key: plan.providerNode,
-        amt_to_forward_msat: '50750000', fee_msat: '0' }] } }] });
+      route: { total_amt_msat: String(plan.quote.invoiceSats * 1000), total_fees_msat: '0', hops: [{ chan_id: plan.routing.channelId, pub_key: plan.providerNode,
+        amt_to_forward_msat: String(plan.quote.invoiceSats * 1000), fee_msat: '0' }] } }] });
   const mutation = async (key: string, effect: () => unknown) => {
     mutations.push(key);
     const disk = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8'));
@@ -103,7 +103,7 @@ async function fixture() {
       assert.equal(wallet, true); assert.equal(params.length, 7); assert.deepEqual(params[0], [input]); assert.equal(params[5], 2); assert.equal(params[6], 0);
       assert.deepEqual(params[3], { add_inputs: false, lockUnspents: true, changeAddress: plan.refundDestination, fee_rate: 2, replaceable: false });
       const psbt = new Psbt({ network: networks.regtest }).addInput({ hash: input.txid, index: 0, witnessUtxo: { script: own.output!, value: 100000n } })
-        .addOutput({ script: f.htlc.output, value: 50000n }).addOutput({ script: own.output!, value: 49700n });
+        .addOutput({ script: f.htlc.output, value: BigInt(plan.quote.amountSats) }).addOutput({ script: own.output!, value: BigInt(99700 - plan.quote.amountSats) });
       return { psbt: psbt.toBase64() };
     });
     else if (method === 'walletprocesspsbt') value = await mutation(method, () => {
@@ -133,13 +133,14 @@ async function fixture() {
     if (path === '/v1/getinfo') value = node(plan.payerNode);
     else if (path === '/v1/channels') value = { channels: [channel(plan.providerNode, '500000', '4400000')] };
     else if (path === `/v1/payreq/${invoice}`) value = { destination: plan.providerNode, payment_hash: plan.contract.paymentHash,
-      num_satoshis: '50750', num_msat: '50750000', timestamp: String(Math.floor(Date.now() / 1000)), expiry: '3600', cltv_expiry: '80' };
+      num_satoshis: String(plan.quote.invoiceSats), num_msat: String(plan.quote.invoiceSats * 1000), timestamp: String(Math.floor(Date.now() / 1000)), expiry: '3600', cltv_expiry: '80' };
     else if (path === recoveryRoutedPaymentsPath) value = { payments: [paymentWire()], first_index_offset: '1', last_index_offset: '1' };
     else throw new Error('Unexpected synthetic LND operation');
     return structuredClone(value) as T;
   } };
   const transport: PaymentStreamTransport = { origin: plan.routing.payerOrigin, async stream(path, body, onPayment, signal, beforeRequest) {
     await beforeRequest?.(); signal.throwIfAborted(); assert.equal(path, '/v2/router/send');
+    assert.equal((body as { fee_limit_sat: string }).fee_limit_sat, String(plan.routingFeeLimitSats));
     assert.deepEqual((body as { outgoing_chan_ids: string[] }).outgoing_chan_ids, [plan.routing.channelId]);
     assert.equal(Object.values(store.read().controlledExecutions!)[0]!.payerSend!.status, 'INTENT');
     sends++; state = 'ACCEPTED'; onPayment(paymentWire());
@@ -172,6 +173,18 @@ test('runtime assembly is inert, scope-bound, and inspection uses only existing 
     assert.deepEqual(x.store.read(), before); assert.deepEqual(x.mutations, []); assert.equal(x.sends(), 0);
     x.deps.bitcoin.origin = 'http://example.com';
     await assert.rejects(runtime.execute()); assert.equal(x.sends(), 0);
+  } finally { await x.cleanup(); }
+});
+
+test('new exact-debit profile completes through concrete adapters with a zero routing fee limit', async () => {
+  const x = await fixture(50000);
+  try {
+    const result = await x.runtime().execute();
+    const swap = x.store.read().swaps[result.id]!;
+    assert.equal(result.state, 'COMPLETED'); assert.equal(swap.quote.invoiceSats, 50000);
+    assert.equal(swap.quote.serviceFeeSats, 750); assert.equal(swap.quote.amountSats - swap.quote.claimFeeSats, 48750);
+    assert.equal(swap.clientPayment!.feeLimitSats, 0); assert.equal(swap.clientPayment!.feeSats, 0);
+    assert.equal(x.sends(), 1);
   } finally { await x.cleanup(); }
 });
 

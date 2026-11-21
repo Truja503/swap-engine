@@ -1,0 +1,132 @@
+use ark_client::{Blockchain, Error, SpendStatus, TxStatus};
+use ark_core::ExplorerUtxo;
+use bitcoin::{Address, Amount, Network, OutPoint, Transaction, Txid};
+use serde::Deserialize;
+use std::time::Duration;
+
+pub const ESPLORA: &str = "http://127.0.0.1:33000/api";
+const GENESIS: &str = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206";
+
+pub struct RegtestBlockchain(reqwest::Client);
+
+impl RegtestBlockchain {
+    pub fn new() -> Result<Self, Error> {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map(Self)
+            .map_err(|_| unavailable())
+    }
+
+    async fn get(&self, path: &str) -> Result<reqwest::Response, Error> {
+        self.0
+            .get(format!("{ESPLORA}{path}"))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|_| unavailable())
+    }
+}
+
+fn unavailable() -> Error {
+    Error::consumer(std::io::Error::other("RegtestIndexerUnavailable"))
+}
+
+fn unsupported() -> Error {
+    Error::consumer(std::io::Error::other(
+        "Operation outside scope of Ark lab #49",
+    ))
+}
+
+#[derive(Deserialize)]
+struct Utxo {
+    txid: Txid,
+    vout: u32,
+    value: u64,
+    status: Status,
+}
+
+#[derive(Deserialize)]
+struct Status {
+    confirmed: bool,
+    block_height: Option<u64>,
+    block_time: Option<u64>,
+}
+
+impl Blockchain for RegtestBlockchain {
+    // The SDK uses this during explicit contract restoration. The other
+    // blockchain methods belong to later funding and settlement issues.
+    async fn find_outpoints(&self, address: &Address) -> Result<Vec<ExplorerUtxo>, Error> {
+        if !address
+            .as_unchecked()
+            .is_valid_for_network(Network::Regtest)
+            || self
+                .get("/block-height/0")
+                .await?
+                .text()
+                .await
+                .map_err(|_| unavailable())?
+                .trim()
+                != GENESIS
+        {
+            return Err(Error::consumer(std::io::Error::other(
+                "RegtestNetworkMismatch",
+            )));
+        }
+        let tip: u64 = self
+            .get("/blocks/tip/height")
+            .await?
+            .text()
+            .await
+            .map_err(|_| unavailable())?
+            .trim()
+            .parse()
+            .map_err(|_| unavailable())?;
+        let entries: Vec<Utxo> = self
+            .get(&format!("/address/{address}/utxo"))
+            .await?
+            .json()
+            .await
+            .map_err(|_| unavailable())?;
+        entries
+            .into_iter()
+            .map(|entry| {
+                let confirmations = if entry.status.confirmed {
+                    tip.checked_sub(entry.status.block_height.ok_or_else(unavailable)?)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(unavailable)?
+                } else {
+                    0
+                };
+                Ok(ExplorerUtxo {
+                    outpoint: OutPoint::new(entry.txid, entry.vout),
+                    amount: Amount::from_sat(entry.value),
+                    confirmation_blocktime: entry.status.block_time,
+                    confirmations,
+                    is_spent: false,
+                })
+            })
+            .collect()
+    }
+
+    async fn find_tx(&self, _: &Txid) -> Result<Option<Transaction>, Error> {
+        Err(unsupported())
+    }
+    async fn get_tx_status(&self, _: &Txid) -> Result<TxStatus, Error> {
+        Err(unsupported())
+    }
+    async fn get_output_status(&self, _: &Txid, _: u32) -> Result<SpendStatus, Error> {
+        Err(unsupported())
+    }
+    async fn broadcast(&self, _: &Transaction) -> Result<(), Error> {
+        Err(unsupported())
+    }
+    async fn get_fee_rate(&self) -> Result<f64, Error> {
+        Err(unsupported())
+    }
+    async fn broadcast_package(&self, _: &[&Transaction]) -> Result<(), Error> {
+        Err(unsupported())
+    }
+}

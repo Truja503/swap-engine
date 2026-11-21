@@ -1,0 +1,2 @@
+*.env
+!ark.regtest.env.example

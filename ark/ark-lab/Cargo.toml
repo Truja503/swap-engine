@@ -1,0 +1,23 @@
+[package]
+name = "ark-lab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ark-bdk-wallet = { git = "https://github.com/arkade-os/rust-sdk", rev = "352ca21bcaa01d3ddb535b0ebfb20cd9b028c357" }
+ark-client = { git = "https://github.com/arkade-os/rust-sdk", rev = "352ca21bcaa01d3ddb535b0ebfb20cd9b028c357", features = ["sqlite"] }
+ark-grpc = { git = "https://github.com/arkade-os/rust-sdk", rev = "352ca21bcaa01d3ddb535b0ebfb20cd9b028c357" }
+ark-core = { git = "https://github.com/arkade-os/rust-sdk", rev = "352ca21bcaa01d3ddb535b0ebfb20cd9b028c357" }
+bip39 = { version = "2.2", features = ["rand", "zeroize"] }
+bitcoin = "0.32.7"
+clap = { version = "4.5", features = ["derive"] }
+fs2 = "0.4"
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+zeroize = "1"

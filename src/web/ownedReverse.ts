@@ -88,6 +88,7 @@ export function mountOwnedReverse(onConfigured: (configured: Preparation, availa
       localStorage.setItem(evidenceKey, evidence);
       if (localStorage.getItem(evidenceKey) !== evidence) return;
       localStorage.removeItem(executionKey); if (matchesPreparation) localStorage.removeItem(preparationKey);
+      try { sessionStorage.setItem('swap-engine.success-notice', swap.id); } catch { /* Storage is optional. */ }
       location.hash = 'swap';
     } catch { /* Keep the verified history visible when browser storage cannot preserve it. */ }
   }

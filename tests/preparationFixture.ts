@@ -10,14 +10,15 @@ import { createReversePreparation, preparationDigest, type PreparationSpec, type
 import { controlledRunDigest, createControlledReverseBackend } from '../src/core/ControlledReverseBackend.js';
 import type { Invoice } from '../src/lightning/LndClient.js';
 
-export async function preparationFixture() {
+export async function preparationFixture(sourceAmountSats?: number) {
   const f = contractFixture();
   const directory = await privateTestDirectory('preparation');
   let store = await Store.open(directory); let clock = Date.now(); let exists = false; let calls = 0; let posts = 0; let inspections = 0;
   const spec: PreparationSpec = { id: randomUUID(), isolationId: randomUUID(), tipHeight: 100,
     providerNode: f.contract.claimPublicKey, payerNode: f.contract.refundPublicKey, routing: routingFixture(),
     client: { paymentHash: f.contract.paymentHash, claimPublicKey: f.contract.claimPublicKey }, refundPublicKey: f.contract.refundPublicKey,
-    claimDestination: f.destination, refundDestination: f.destination, input: { txid: 'ab'.repeat(32), vout: 0, valueSats: 100000 } };
+    claimDestination: f.destination, refundDestination: f.destination, input: { txid: 'ab'.repeat(32), vout: 0, valueSats: 100000 },
+    ...(sourceAmountSats === undefined ? {} : { sourceAmountSats }) };
   const approval: PreparationApproval = { id: spec.id, scope: 'isolated-regtest-invoice-only', specDigest: preparationDigest(spec), expiresAt: clock + 120000 };
   const info = (identity: string) => ({ identity_pubkey: identity, synced_to_chain: true, wallet_synced: true, chains: [{ chain: 'bitcoin', network: 'regtest' }] });
   const pInfo = info(spec.providerNode); const aInfo = info(spec.payerNode);
@@ -27,10 +28,11 @@ export async function preparationFixture() {
   const pChannels = { channels: [channel(spec.payerNode)] }; const aChannels = { channels: [channel(spec.providerNode)] };
   const chain = { chain: 'regtest', blocks: 100, initialblockdownload: false };
   const paymentRequest = 'lnbcrt' + 'a'.repeat(30);
-  const decoded = { destination: spec.providerNode, payment_hash: spec.client.paymentHash, num_satoshis: '50750', num_msat: '50750000',
+  const invoiceSats = sourceAmountSats ?? 50750;
+  const decoded = { destination: spec.providerNode, payment_hash: spec.client.paymentHash, num_satoshis: String(invoiceSats), num_msat: String(invoiceSats * 1000),
     timestamp: String(Math.floor(clock / 1000)), expiry: '3600', cltv_expiry: '80' };
   const invoice: Invoice = { state: 'OPEN', r_hash: Buffer.from(spec.client.paymentHash, 'hex').toString('base64'),
-    value: '50750', amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] };
+    value: String(invoiceSats), amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] };
   const keys = { paymentHash: spec.client.paymentHash, claimPublicKey: spec.client.claimPublicKey, refundPublicKey: spec.refundPublicKey };
   let credentialHook: () => Promise<void> = async () => {};
   let replyHook: () => Promise<void> = async () => {};
@@ -59,7 +61,7 @@ export async function preparationFixture() {
       await inspectHook(result); return result;
     },
     async createInvoice(request, beforeRequest) {
-      calls++; assert.deepEqual(request, { hash: spec.client.paymentHash, sats: 50750, expirySeconds: 3600, cltvDelta: 80 });
+      calls++; assert.deepEqual(request, { hash: spec.client.paymentHash, sats: invoiceSats, expirySeconds: 3600, cltvDelta: 80 });
       let disk = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
       assert.equal(disk.reversePreparations[spec.id].invoiceAttempt.wireAuthorized, false);
       await credentialHook(); await beforeWireHook();

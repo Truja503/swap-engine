@@ -2,10 +2,10 @@ import { api, type Session, type ReverseAvailability, type OwnedPreparation } fr
 
 /** Persist admission/review keys before POST. Network uncertainty retains the same
  * attempt across reload; this module has no payment/execution API call. */
-export async function prepareForReview(owner: Session, available: ReverseAvailability): Promise<string> {
+export async function prepareForReview(owner: Session, available: ReverseAvailability, amountSats: number): Promise<string> {
   if (owner.user.role !== 'ADMIN' || owner.user.username !== 'truja503' || !available.preparationAvailable) throw new Error('Preparation unavailable for this account.');
   const name = `swap-engine.preparation.${owner.user.id}`;
-  type Saved = { key: string; id?: string; reviewKey?: string; reviewState?: 'INTENT' | 'CONFIRMED'; reviewedUntil?: number };
+  type Saved = { key: string; id?: string; amountSats?: number; reviewKey?: string; reviewState?: 'INTENT' | 'CONFIRMED'; reviewedUntil?: number };
   const save = (value: Saved) => { localStorage.setItem(name, JSON.stringify(value)); return value; };
   const raw = localStorage.getItem(name); let saved: Saved | undefined;
   if (raw !== null) {
@@ -26,8 +26,9 @@ export async function prepareForReview(owner: Session, available: ReverseAvailab
     if (['COMPLETED', 'EXPIRED', 'REJECTED'].includes(result.status)) { saved = undefined; result = undefined; }
   }
   if (!result) {
-    saved ??= save({ key: crypto.randomUUID() });
-    result = await api.prepare(saved.key, owner.csrfToken);
+    saved ??= save({ key: crypto.randomUUID(), amountSats });
+    if (saved.amountSats !== amountSats) throw new Error('A previous preparation has different terms. Review it before continuing.');
+    result = await api.prepare(saved.key, owner.csrfToken, amountSats);
     saved = save({ ...saved, id: result.id });
   }
   for (let attempts = 0; result.status === 'INTENT' && attempts < 30; attempts++) {
@@ -36,6 +37,7 @@ export async function prepareForReview(owner: Session, available: ReverseAvailab
   if (result.status === 'REJECTED') throw new Error('Regtest prerequisites unavailable. No invoice preparation was started. Refresh status before another explicit SWAP attempt.');
   if (result.status !== 'READY' || !result.swapId) throw new Error('Preparation needs reconciliation. The existing attempt is retained; no new invoice was requested.');
   const swap = await api.ownedSwap(result.swapId, signal);
+  if (swap.payment.valueSats !== amountSats) throw new Error('An existing preparation has a different amount. Review it before continuing.');
   if (swap.execution.status !== 'NOT_STARTED') return swap.id;
   if (!swap.execution.approvedUntil || swap.execution.approvedUntil <= Date.now()) {
     // A fresh explicit SWAP click may review the SAME unused invoice after expiry.

@@ -3,12 +3,13 @@ import { mountCubes } from './cubes.js';
 import { canQuote, defaultPair, railLabel, type Pair } from './rails.js';
 import { details, get, integer, message, sats, text } from './ui.js';
 
-export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<void>) {
+export function mountQuote(prepare?: (stillVisible: () => boolean, amountSats: number) => Promise<void>) {
   const form = get<HTMLFormElement>('quote-form');
   const amount = get<HTMLInputElement>('amount');
   const action = get<HTMLButtonElement>('swap-action');
   const dialog = get<HTMLDialogElement>('review-dialog');
-  const status = (message: string) => text('quote-status', message);
+  let successNotice = false;
+  const status = (message: string) => text('quote-status', successNotice ? '¡Swap exitoso!' : message);
   const numbers = ['service', 'claim', 'cost', 'received-preview'];
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
   for (const type of ['copy', 'cut']) form.addEventListener(type, event => event.preventDefault());
@@ -38,7 +39,7 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
 
   function principal() {
     const value = Number(amount.value);
-    if (/^\d+$/.test(amount.value) && value >= 10_000 && value <= 1_000_000) return value;
+    if (/^\d+$/.test(amount.value) && value >= (controlled === true ? 11_000 : 10_000) && value <= (controlled === true ? 50_000 : 1_000_000)) return value;
     return undefined;
   }
 
@@ -62,10 +63,11 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
     status('Quoting route…');
     const work = api.quote(value, active.signal, csrf).then(result => {
       if (version !== revision) return;
-      const totals = quoteTotals(result, value);
+      const totals = quoteTotals(result, value, Date.now(), controlled === true);
       quote = result;
       animateValues([sats(result.serviceFeeSats), sats(result.claimFeeSats), sats(totals.lost), integer(totals.received)]);
-      status('Quote ready · execution off');
+      if (controlled === true) action.disabled = preparing || !aligned || !canQuote(pair) || !canPrepare;
+      status(controlled === true ? 'Quote ready · review before swapping' : 'Quote ready · execution off');
       expiry = window.setTimeout(() => {
         invalidate();
         status('Quote expired · press Swap');
@@ -87,8 +89,12 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
   function schedule(delay: number) {
     if (!visible) return;
     if (controlled !== false) {
-      action.disabled = preparing || controlled !== true || !aligned || !canQuote(pair);
-      status(controlled === true ? preparing ? 'Preparing your regtest swap for review…' : action.disabled ? 'Route unavailable' : canPrepare ? 'Prepare a 50,000 sat regtest swap for review.' : 'Review a prepared swap.'
+      const value = principal();
+      action.disabled = preparing || controlled !== true || !aligned || !canQuote(pair) || (canPrepare && (!value || !quote || quote.invoiceSats !== value));
+      if (value === undefined) amount.setAttribute('aria-invalid', 'true'); else amount.removeAttribute('aria-invalid');
+      if (controlled === true && canPrepare && aligned && canQuote(pair) && value !== undefined && !quote && !preparing) {
+        status('Updating quote…'); debounce = window.setTimeout(() => void load(value), delay);
+      } else status(controlled === true ? preparing ? 'Preparing your regtest swap for review…' : value === undefined ? 'Enter 11,000–50,000 sats' : canPrepare ? 'Quote ready · review before swapping' : 'Review a prepared swap.'
         : controlled === 'unavailable' ? 'Quote service unavailable.' : 'Checking quote availability…');
       return;
     }
@@ -114,19 +120,21 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
   });
 
   amount.addEventListener('input', () => {
+    successNotice = false;
     invalidate();
     schedule(290);
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    successNotice = false;
     if (controlled === true) {
       if (preparing) return;
       if (canPrepare && prepare && !preparing && aligned && canQuote(pair)) {
         const version = revision; const active = () => visible && version === revision && controlled === true;
         let failure: string | undefined;
         preparing = true; schedule(0);
-        try { await prepare(active); }
+        try { const value = principal(); if (!value || !quote || quote.invoiceSats !== value) throw new Error('Refresh the quote before continuing.'); await prepare(active, value); }
         catch (error) { failure = error instanceof Error ? error.message : 'Preparation uncertain. Check existing status.'; }
         finally { preparing = false; if (visible) { schedule(0); if (active() && failure) status(failure); } }
         return;
@@ -173,7 +181,13 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
         if (!quote) invalidate();
         return;
       }
-      if (quote && quote.expiresAt > Date.now()) return;
+      try {
+        if (sessionStorage.getItem('swap-engine.success-notice')) {
+          sessionStorage.removeItem('swap-engine.success-notice');
+          successNotice = true;
+        }
+      } catch { /* The completed swap remains available in transaction history. */ }
+      if (quote && quote.expiresAt > Date.now()) { if (successNotice) status(''); return; }
       invalidate();
       schedule(0);
     },
@@ -182,8 +196,8 @@ export function mountQuote(prepare?: (stillVisible: () => boolean) => Promise<vo
       controlled = configured;
       csrf = csrfToken;
       canPrepare = preparationAvailable;
-      amount.readOnly = configured === true;
-      if (canPrepare) amount.value = '50000';
+      amount.readOnly = false;
+      text('amount-help', configured === true ? '11,000–50,000 sats' : '10,000–1,000,000 sats');
       invalidate();
       schedule(0);
     },

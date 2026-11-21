@@ -100,6 +100,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
   };
   const assemble = async (id: string, entry: PreparationEntry, fresh: boolean, marker?: { invoiceMayHaveBeenAttempted: boolean }): Promise<PreparedRuntime | undefined> => {
     if (closed || !/^[a-f0-9]{64}$/.test(id) || !z.uuid().safeParse(entry.attemptId).success || entry.ownerId !== policy.ownerId) throw operatorStopped();
+    if (entry.sourceAmountSats !== undefined && (!Number.isSafeInteger(entry.sourceAmountSats) || entry.sourceAmountSats < 11000 || entry.sourceAmountSats > policy.amountSats)) throw operatorStopped();
     const directory = join(policy.runsDirectory, entry.attemptId); const backupDirectory = join(policy.backupsDirectory, entry.attemptId);
     if (fresh) {
       try { await lstat(directory); if (marker) marker.invoiceMayHaveBeenAttempted = true; throw operatorStopped(); }
@@ -124,7 +125,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
       await mkdir(directory, { mode: 0o700 }); await mkdir(backupDirectory, { mode: 0o700 });
       const custodyPolicy = ownedRunPolicySchema.parse({ ...Object.fromEntries(Object.entries(policy).filter(([key]) =>
         ['ownerUsername','ownerId','authStorePath','origin','port','providerNode','payerNode','routing','claimDestination','refundDestination','credentialPaths'].includes(key))),
-        tipHeight: chain.blocks, input, backupDirectory });
+        tipHeight: chain.blocks, input, backupDirectory, ...(entry.sourceAmountSats === undefined ? {} : { sourceAmountSats: entry.sourceAmountSats }) });
       await operatorArtifact(directory, 'admission.json', { id, entry, policyDigest: sha256(Buffer.from(JSON.stringify(policy))) });
       await operatorArtifact(directory, 'owner-policy.json', custodyPolicy);
       await prepareOwnedRunCustody(directory, custodyPolicy, password);
@@ -135,6 +136,7 @@ export async function createOwnedRuntimeFactory<S extends { account: { id: strin
       admission.policyDigest !== sha256(Buffer.from(JSON.stringify(policy)))) throw operatorStopped();
     const ready = z.object({ artifacts: z.record(z.string(), z.string()) }).parse(JSON.parse((await protectedBytes(join(directory, 'custody-ready.json'))).toString()));
     const spec = preparationSpecSchema.parse(await checkedJSON(join(directory, 'spec.json'), ready.artifacts['spec.json']!));
+    if (spec.sourceAmountSats !== entry.sourceAmountSats) throw operatorStopped();
     const backup = backupSchema.parse(await checkedJSON(join(directory, 'custody-backup.json'), ready.artifacts['custody-backup.json']!));
     let store: Store | undefined; let client: SecretVault | undefined; let refund: SecretVault | undefined;
     let concrete: JitExecutor | undefined; let underlying: Promise<unknown> | undefined; let stopped = false;

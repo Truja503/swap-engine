@@ -8,6 +8,7 @@ import { states } from '../core/SwapTypes.js';
 import { describeSwapState } from '../ui/swapStatus.js';
 import { ReconcileResponse } from './schemas.js';
 import { buildHtlc } from '../bitcoin/HtlcBuilder.js';
+import { invoiceBudget } from '../core/SwapManager.js';
 
 const ownerSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -42,8 +43,11 @@ export function sessionOwnerAuthenticator<S extends { account: { id: string; rol
 }
 
 function profile(swap: Swap) {
-  if (swap.quote.amountSats !== 50000 || swap.quote.serviceFeeSats !== 750 || swap.quote.invoiceSats !== 50750 ||
-    swap.quote.claimFeeSats !== 500 || swap.quote.fundingReserveSats !== 1000 || !swap.invoice) error(409, 'PREPARED_SWAP_REQUIRED');
+  const q = swap.quote;
+  const legacy = q.amountSats === 50000 && q.serviceFeeSats === 750 && q.invoiceSats === 50750;
+  let current = false;
+  try { const budget = invoiceBudget(q.invoiceSats); current = Object.entries(budget).every(([key, value]) => q[key as keyof typeof budget] === value); } catch { /* Outside the approved profile. */ }
+  if ((!legacy && !current) || q.claimFeeSats !== 500 || q.fundingReserveSats !== 1000 || !swap.invoice) error(409, 'PREPARED_SWAP_REQUIRED');
 }
 async function body(req: IncomingMessage) {
   if (req.headers['content-type']?.split(';')[0] !== 'application/json') error(400, 'INVALID_REQUEST');

@@ -8,7 +8,7 @@ import type { ControlledRunReadiness } from './ControlledReverseBackend.js';
 import type { ReadinessCustody } from './ControlledReadiness.js';
 import { controlledRunDigest } from './ControlledReverseBackend.js';
 import { createReverseTestPlan, reverseRoutingSchema, verifyReverseTestPlan } from './ReverseTestPlan.js';
-import { SwapManager } from './SwapManager.js';
+import { SwapManager, invoiceBudget } from './SwapManager.js';
 import { invoiceOnlyPorts } from './InvoiceOnlyPorts.js';
 import { transition, updateSwapRevision } from './SwapStateMachine.js';
 import { verifyDecodedHoldInvoice } from '../lightning/InvoiceVerification.js';
@@ -18,6 +18,7 @@ const pubkey = z.string().regex(/^(02|03)[a-f0-9]{64}$/);
 export const preparationSpecSchema = z.object({ id: z.uuid(), isolationId: z.uuid(), tipHeight: z.number().int().positive().max(499999969),
   providerNode: pubkey, payerNode: pubkey, routing: reverseRoutingSchema,
   client: z.object({ paymentHash: hash, claimPublicKey: pubkey }).strict(), refundPublicKey: pubkey,
+  sourceAmountSats: z.number().int().min(11000).max(50000).optional(),
   claimDestination: z.string(), refundDestination: z.string(),
   input: z.object({ txid: hash, vout: z.number().int().nonnegative().max(0xffffffff),
     valueSats: z.number().int().min(61000).max(Number.MAX_SAFE_INTEGER) }).strict(),
@@ -46,7 +47,7 @@ export type PreparationAdapters = {
 };
 const stopped = () => new Error('Reverse preparation unavailable or uncertain; inspect existing evidence without retry');
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const budget = { amountSats: 50000, serviceFeeSats: 750, invoiceSats: 50750, fundingReserveSats: 1000, claimFeeSats: 500 };
+const legacyBudget = { amountSats: 50000, serviceFeeSats: 750, invoiceSats: 50750, fundingReserveSats: 1000, claimFeeSats: 500 };
 
 export function preparationDigest(value: PreparationSpec) {
   return createHash('sha256').update(JSON.stringify(preparationSpecSchema.parse(value))).digest('hex');
@@ -58,6 +59,7 @@ export function preparationDigest(value: PreparationSpec) {
 export function createReversePreparation(store: Store, supplied: PreparationSpec, adapters: PreparationAdapters,
   suppliedApproval?: PreparationApproval) {
   const spec = preparationSpecSchema.parse(structuredClone(supplied)); const digest = preparationDigest(spec);
+  const budget = spec.sourceAmountSats === undefined ? legacyBudget : invoiceBudget(spec.sourceAmountSats);
   const approval = suppliedApproval ? preparationApprovalSchema.parse(structuredClone(suppliedApproval)) : undefined;
   const now = adapters.now ?? Date.now;
   const planFor = (quote: Quote) => createReverseTestPlan(quote, spec.tipHeight, spec.client, spec.refundPublicKey,
@@ -66,6 +68,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
   planFor({ id: spec.id, ...budget, expiresAt: now() + 120000 });
   const boundPlan = (value: unknown) => {
     const plan = verifyReverseTestPlan(value); const expected = planFor(plan.quote); expected.createdAt = plan.createdAt;
+    if (Object.entries(budget).some(([key, amount]) => plan.quote[key as keyof typeof budget] !== amount)) throw stopped();
     if (!same(plan, expected)) throw stopped(); return plan;
   };
   const endpoints = () => {
@@ -113,7 +116,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
       const available = client === adapters.payer
         ? BigInt(c.local_balance) - BigInt(c.local_constraints.chan_reserve_sat) - BigInt(c.commit_fee)
         : BigInt(c.remote_balance) - BigInt(c.remote_constraints.chan_reserve_sat) - BigInt(c.commit_fee);
-      if (available < 50850n) throw stopped(); if (available < incoming) incoming = available;
+      if (available < BigInt(budget.invoiceSats + 100)) throw stopped(); if (available < incoming) incoming = available;
     }
     const keys = await adapters.custody(spec.client.paymentHash);
     if (keys.paymentHash !== spec.client.paymentHash || keys.claimPublicKey !== spec.client.claimPublicKey || keys.refundPublicKey !== spec.refundPublicKey) throw stopped();
@@ -124,7 +127,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
   };
   const verifyInvoice = async (plan: ReturnType<typeof verifyReverseTestPlan>, invoice: Invoice) => {
     if (!/^lnbcrt[0-9a-z]{20,4096}$/.test(invoice.payment_request) || invoice.state !== 'OPEN' ||
-      invoice.r_hash !== Buffer.from(spec.client.paymentHash, 'hex').toString('base64') || invoice.value !== '50750' || invoice.amt_paid_sat !== '0' ||
+      invoice.r_hash !== Buffer.from(spec.client.paymentHash, 'hex').toString('base64') || invoice.value !== String(budget.invoiceSats) || invoice.amt_paid_sat !== '0' ||
       invoice.htlcs?.some(h => h.state === 'ACCEPTED' || h.state === 'SETTLED')) throw stopped();
     verifyDecodedHoldInvoice(invoice.payment_request, await adapters.payer.call(`/v1/payreq/${invoice.payment_request}`), {
       paymentHash: spec.client.paymentHash, payeePublicKey: spec.providerNode, invoiceSats: plan.quote.invoiceSats, minFinalCltv: plan.invoiceCltvDelta }, now());
@@ -138,7 +141,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
       observed.funding.txid !== spec.input.txid || observed.funding.vout !== spec.input.vout || observed.funding.valueSats !== spec.input.valueSats) throw stopped();
     if (!swap.invoice) throw stopped();
     verifyDecodedHoldInvoice(swap.invoice, observed.decodedInvoice, { paymentHash: spec.client.paymentHash,
-      payeePublicKey: spec.providerNode, invoiceSats: 50750, minFinalCltv: 80 }, now());
+      payeePublicKey: spec.providerNode, invoiceSats: budget.invoiceSats, minFinalCltv: 80 }, now());
   };
   const finish = async (attemptId: string, status: 'INTENT' | 'RECONCILING', expectedPlan: ReturnType<typeof verifyReverseTestPlan>) => {
     const current = owned(attemptId, status); const plan = boundPlan(current.plan);
@@ -201,7 +204,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
       });
       try {
         const liquidity = await nodesAndCustody(); await unusedHash(); authorize(); owned(attemptId, 'INTENT');
-        const manager = new SwapManager(store); const quote = await manager.quote(50000, now());
+        const manager = new SwapManager(store); const quote = spec.sourceAmountSats === undefined ? await manager.quote(50000, now()) : await manager.quoteInvoice(spec.sourceAmountSats, now());
         const plan = planFor(quote);
         await store.transaction(db => { authorize(); owned(attemptId, 'INTENT'); db.reversePreparations![spec.id]!.plan = plan; });
         // One quote object, including ID and expiry, is used in the plan and persisted swap.
@@ -218,7 +221,7 @@ export function createReversePreparation(store: Store, supplied: PreparationSpec
               if (!same(record.plan, plan)) throw stopped();
               if (s.state !== 'QUOTED' || s.pendingAction !== 'CREATE_INVOICE' || s.invoice || plan.quote.expiresAt <= now()) throw stopped();
               const draft = db.reversePreparations![spec.id]!;
-              if (draft.invoiceAttempt || paymentHash !== spec.client.paymentHash || sats !== 50750 || expirySeconds !== 3600 || cltvDelta !== 80) throw stopped();
+              if (draft.invoiceAttempt || paymentHash !== spec.client.paymentHash || sats !== budget.invoiceSats || expirySeconds !== 3600 || cltvDelta !== 80) throw stopped();
               draft.invoiceAttempt = { attemptId: randomUUID(), revision: s.revision, wireAuthorized: false };
             });
             const response = await adapters.createInvoice(Object.freeze({ hash: paymentHash, sats, expirySeconds, cltvDelta }), async () => {

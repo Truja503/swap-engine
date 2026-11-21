@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Store } from '../persistence/Store.js';
 import type { Database } from '../core/SwapTypes.js';
 import type { OwnedReverseApi, OwnerSessions } from './ownedReverse.js';
+import { invoiceBudget } from '../core/SwapManager.js';
 
 export type PreparationEntry = NonNullable<Database['ownedPreparations']>[string];
 /** Trusted native adapter proof: the invoice-creation harness was never invoked. */
@@ -16,7 +17,7 @@ export type PreparedRuntime = { swapId: string; api: OwnedReverseApi;
 export type PreparationFactory = { prepare(id: string, entry: PreparationEntry): Promise<PreparedRuntime>;
   restore(id: string, entry: PreparationEntry): Promise<PreparedRuntime | undefined>; history?(): Promise<PreparedRuntime[]>;
   preflight?(): Promise<unknown>; close?(): Promise<void> };
-const inputSchema = z.object({ amountSats: z.literal(50000) }).strict();
+const inputSchema = z.object({ amountSats: z.number().int().min(11000).max(50000) }).strict();
 const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 class Rejected extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
@@ -94,7 +95,7 @@ export async function createOwnedPreparation<S extends { account: { id: string; 
   return {
     async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
       const path = new URL(req.url ?? '/', policy.origin).pathname;
-      if (path !== '/v1/reverse/availability' && !path.startsWith('/v1/reverse/preparations') &&
+      if (path !== '/v1/quotes' && path !== '/v1/reverse/availability' && !path.startsWith('/v1/reverse/preparations') &&
         path !== '/v1/swaps' && !path.startsWith('/v1/swaps/')) return false;
       requests++;
       const send = (status: number, value: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -104,6 +105,10 @@ export async function createOwnedPreparation<S extends { account: { id: string; 
         const session = await sessions.get(req); if (!session) reject(401, 'AUTHENTICATION_REQUIRED');
         if (session.account.id !== policy.ownerId || session.account.username !== policy.ownerUsername || session.account.role !== 'ADMIN') reject(403, 'FORBIDDEN');
         if (!['GET', 'HEAD'].includes(req.method ?? '') && !sessions.verifyCsrf(req, session)) reject(403, 'CSRF_REJECTED');
+        if (req.method === 'POST' && path === '/v1/quotes') {
+          const input = inputSchema.parse(await json(req));
+          send(201, { id: randomUUID(), ...invoiceBudget(input.amountSats), expiresAt: Date.now() + 120000 }); return true;
+        }
         if (req.method === 'GET' && path === '/v1/reverse/availability') {
           await refresh();
           const swaps = [...runtimes.values()].flatMap(r => r.api.list(policy.ownerId));
@@ -124,7 +129,7 @@ export async function createOwnedPreparation<S extends { account: { id: string; 
             const existing = db.ownedPreparations?.[id];
             if (existing) { if (existing.ownerId !== policy.ownerId || existing.fingerprint !== fingerprint) reject(409, 'IDEMPOTENCY_KEY_CONFLICT'); return; }
             if (Object.values(db.ownedPreparations ?? {}).some(r => !['COMPLETED', 'EXPIRED', 'REJECTED'].includes(r.status))) reject(409, 'EXISTING_PREPARATION_REQUIRES_REVIEW');
-            created = { ownerId: policy.ownerId, fingerprint, attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT' };
+            created = { ownerId: policy.ownerId, fingerprint, attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT', sourceAmountSats: input.amountSats };
             (db.ownedPreparations ??= {})[id] = created;
           });
           if (created) start(id, created); send(created || pending.has(id) ? 202 : 200, project(id)); return true;

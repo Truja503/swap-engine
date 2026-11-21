@@ -8,11 +8,11 @@ import { mountOwnedReverse } from './ownedReverse.js';
 import { mountQuote } from './quote.js';
 import { get, integer, text } from './ui.js';
 
-const quotes = mountQuote(async stillVisible => {
+const quotes = mountQuote(async (stillVisible, amountSats) => {
   const owner = session;
   if (!owner) throw new Error('Sign in to prepare a regtest swap.');
   const availability = await api.reverseAvailability(new AbortController().signal);
-  const id = await prepareForReview(owner, availability);
+  const id = await prepareForReview(owner, availability, amountSats);
   if (session !== owner || !stillVisible()) return;
   location.hash = 'track'; await reverse.reviewPrepared(id);
 });

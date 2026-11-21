@@ -17,6 +17,7 @@ const absolute = z.string().refine(isAbsolute); const pubkey = z.string().regex(
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const ownedRunPolicySchema = z.object({ ownerUsername: z.literal('truja503'), ownerId: z.uuid(), authStorePath: absolute,
   origin: z.literal('http://127.0.0.1:3101'), port: z.literal(3101), backupDirectory: absolute,
+  sourceAmountSats: z.number().int().min(11000).max(50000).optional(),
   tipHeight: z.number().int().positive().max(499999969), providerNode: pubkey, payerNode: pubkey,
   routing: reverseRoutingSchema, claimDestination: z.string(), refundDestination: z.string(),
   input: z.object({ txid: hash, vout: z.number().int().nonnegative().max(0xffffffff), valueSats: z.number().int().min(61000).max(Number.MAX_SAFE_INTEGER) }).strict(),
@@ -70,7 +71,8 @@ export async function prepareOwnedRunCustody(directory: string, unverified: unkn
     const refund = await new RefundKeyVault(refundVault).create(client.paymentHash);
     const spec = preparationSpecSchema.parse({ id: randomUUID(), isolationId: randomUUID(), tipHeight: policy.tipHeight,
       providerNode: policy.providerNode, payerNode: policy.payerNode, routing: policy.routing, claimDestination: policy.claimDestination,
-      refundDestination: policy.refundDestination, input: policy.input, client: client.toJSON(), refundPublicKey: refund.publicKey });
+      refundDestination: policy.refundDestination, input: policy.input, client: client.toJSON(), refundPublicKey: refund.publicKey,
+      ...(policy.sourceAmountSats === undefined ? {} : { sourceAmountSats: policy.sourceAmountSats }) });
     for (const [name, role] of [['client-secrets', 'client'], ['provider-refund-keys', 'refund']] as const) {
       await mkdir(join(backupDirectory, name), { mode: 0o700 });
       const copied = join(backupDirectory, name, `${role}-${client.paymentHash}.vault`);

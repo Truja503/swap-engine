@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Quote } from './SwapTypes.js';
 import { buildHtlc, type Contract } from '../bitcoin/HtlcBuilder.js';
 import { validateQuoteFields } from '../utils/satoshiMath.js';
+import { invoiceBudget } from './SwapManager.js';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const pubkey = z.string().regex(/^(02|03)[a-f0-9]{64}$/);
@@ -33,7 +34,10 @@ export type ReverseTestPlan = z.infer<typeof reverseTestPlanSchema>;
 export function verifyReverseTestPlan(value: unknown): ReverseTestPlan {
   const plan = reverseTestPlanSchema.parse(value);
   validateQuoteFields(plan.quote);
-  if (plan.quote.amountSats !== 50000 || plan.quote.invoiceSats !== 50750 || plan.quote.claimFeeSats !== 500 ||
+  const legacy = plan.quote.amountSats === 50000 && plan.quote.invoiceSats === 50750 && plan.quote.serviceFeeSats === 750;
+  let current = false;
+  try { const budget = invoiceBudget(plan.quote.invoiceSats); current = Object.entries(budget).every(([key, value]) => plan.quote[key as keyof typeof budget] === value); } catch { /* Invalid budgets remain rejected. */ }
+  if ((!legacy && !current) || plan.quote.claimFeeSats !== 500 ||
     plan.quote.fundingReserveSats !== plan.fundingFeeLimitSats || plan.contract.timeoutHeight !== plan.tipHeight + 30 ||
     plan.providerNode === plan.payerNode || plan.routing.providerOrigin === plan.routing.payerOrigin) throw new Error('Reverse plan differs from test contract');
   const contract = buildHtlc(plan.contract);

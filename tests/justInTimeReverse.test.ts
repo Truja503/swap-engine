@@ -7,8 +7,8 @@ import { preparationFixture } from './preparationFixture.js';
 import { createJustInTimeReverse, type JitAuthorization, type JitExecutor, type JitExecution } from '../src/core/JustInTimeReverse.js';
 import { SwapManager } from '../src/core/SwapManager.js';
 
-async function fixture() {
-  const x = await preparationFixture(); const prepared = await x.harness().prepare();
+async function fixture(sourceAmountSats?: number) {
+  const x = await preparationFixture(sourceAmountSats); const prepared = await x.harness().prepare();
   let time = prepared.plan.quote.expiresAt + 1000; let monotonic = 0; let executions = 0; let stops = 0;
   const clock = { now: () => time, monotonic: () => monotonic };
   let effect: (context: JitExecution) => Promise<{ id: string; state: string; revision: number }> = async context => {
@@ -33,6 +33,18 @@ async function fixture() {
     effect: (fn: typeof effect) => { effect = fn; }, advance(ms: number) { time += ms; monotonic += ms; },
     wall: (value: number) => { time = value; }, cleanup: x.cleanup };
 }
+
+test('JIT retains the selected invoice amount and deductions across execution and reopen', async () => {
+  const f = await fixture(50000);
+  try {
+    const result = await f.make(f.authorization, f.executor).run();
+    const quote = f.x.store.read().swaps[result.id]!.quote;
+    assert.equal(quote.invoiceSats, 50000); assert.equal(quote.serviceFeeSats, 750);
+    assert.equal(quote.amountSats - quote.claimFeeSats, 48750);
+    await f.x.reopen(); assert.equal(f.x.store.read().swaps[result.id]!.quote.invoiceSats, 50000);
+    assert.throws(() => f.make(f.authorization, f.executor)); assert.equal(f.executions(), 1);
+  } finally { await f.cleanup(); }
+});
 
 test('expired handoff review retains one unpaid invoice and creates no quote, authority or execution', async () => {
   const f = await fixture(); try {

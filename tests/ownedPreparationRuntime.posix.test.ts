@@ -17,7 +17,7 @@ import { ClaimWallet } from '../src/client/ClaimWallet.js';
 import { SecretVault } from '../src/persistence/SecretVault.js';
 
 const linux = process.platform === 'linux';
-async function fixture() {
+async function fixture(sourceAmountSats?: number) {
   const x = await readinessFixture(); const directory = x.f.directory;
   const runs = join(directory, 'runs'); const backups = join(directory, 'backups');
   await mkdir(runs, { mode: 0o700 }); await mkdir(backups, { mode: 0o700 });
@@ -34,7 +34,8 @@ async function fixture() {
   let exists = false; let hash = ''; let creates = 0; let actions = 0; let inspections = 0; let clocks = 0; let lost = false; let ntp = true; let owns = true; let canceled = false;
   const paymentRequest = 'lnbcrt' + 'c'.repeat(30);
   let history: unknown = { payments: [], first_index_offset: '0', last_index_offset: '0' };
-  const invoice = (): Invoice => ({ state: canceled ? 'CANCELED' : 'OPEN', r_hash: Buffer.from(hash, 'hex').toString('base64'), value: '50750', amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] });
+  const invoiceSats = sourceAmountSats ?? 50750;
+  const invoice = (): Invoice => ({ state: canceled ? 'CANCELED' : 'OPEN', r_hash: Buffer.from(hash, 'hex').toString('base64'), value: String(invoiceSats), amt_paid_sat: '0', payment_request: paymentRequest, htlcs: [] });
   const confirmed = new Map<string, { hex: string; confirmations: number }>(); const blockHashes = new Map<number, string>();
   const bitcoin = { ...x.bitcoin,
     async call<T>(method: string, params: unknown[] = [], wallet = false): Promise<T> {
@@ -47,13 +48,13 @@ async function fixture() {
   const payer = { ...x.payer, assertRegtest: async () => x.payerInfo,
     async call<T>(path: string): Promise<T> {
       if (path === '/v2/wallet/addresses?account_name=default') return { account_with_addresses: [{ addresses: owns ? [{ address: policy.claimDestination, is_internal: false }] : [] }] } as T;
-      if (path === '/v1/payreq/' + paymentRequest) return { ...x.decoded, payment_hash: hash } as T;
+      if (path === '/v1/payreq/' + paymentRequest) return { ...x.decoded, payment_hash: hash, num_satoshis: String(invoiceSats), num_msat: String(invoiceSats * 1000) } as T;
       return x.payer.call(path);
     } };
   const clients = { bitcoin, provider, payer,
     invoices: { origin: policy.routing.providerOrigin, async lookup(h: string) { return exists && h === hash ? { status: 'PRESENT', invoice: invoice() } : { status: 'ABSENT' }; },
       async create(request: { hash: string; sats: number }, guard: () => Promise<void>) {
-        creates++; assert.equal(request.sats, 50750); await guard(); hash = request.hash; exists = true;
+        creates++; assert.equal(request.sats, invoiceSats); await guard(); hash = request.hash; exists = true;
         const attempt = (await import('node:fs/promises')).readdir(runs); const entries = await attempt;
         const db = JSON.parse(await readFile(join(runs, entries[0]!, 'store/state.json'), 'utf8'));
         assert.equal(Object.values<{ invoiceAttempt: { wireAuthorized: boolean } }>(db.reversePreparations)[0]!.invoiceAttempt.wireAuthorized, true);
@@ -72,7 +73,8 @@ async function fixture() {
     actions: () => { actions++; throw Error('No financial assembly during prepare/restart'); },
     executor: () => { actions++; throw Error('No execution during prepare/restart'); } };
   const factory = await createOwnedRuntimeFactory(policy, { get: async () => undefined, verifyCsrf: () => false }, io);
-  const entry = { ownerId: owner.id, fingerprint: 'ab'.repeat(32), attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT' as const };
+  const entry = { ownerId: owner.id, fingerprint: 'ab'.repeat(32), attemptId: randomUUID(), createdAt: Date.now(), status: 'INTENT' as const,
+    ...(sourceAmountSats === undefined ? {} : { sourceAmountSats }) };
   return { x, factory, entry, runs, policy, io, counts: () => ({ creates, actions, inspections, clocks }),
     lose: () => { lost = true; }, cancel: () => { canceled = true; }, noClock: () => { ntp = false; }, foreignAddress: () => { owns = false; },
     history: (value: unknown) => { history = value; },
@@ -80,6 +82,19 @@ async function fixture() {
     recordBlock: (height: number, hash: string) => { blockHashes.set(height, hash); },
     cleanup: async () => { await factory.close?.(); await x.f.cleanup(); } };
 }
+
+test('owned runtime binds selected debit into durable custody and restores it without another invoice', { skip: !linux }, async () => {
+  const x = await fixture(50000);
+  try {
+    const runtime = await x.factory.prepare('ab'.repeat(32), x.entry);
+    const view = runtime.api.list(x.entry.ownerId)[0]!;
+    assert.equal(view.payment.valueSats, 50000); assert.equal(view.quote.serviceFeeSats, 750); assert.equal(view.claim.netSats, 48750);
+    await runtime.close();
+    const restored = await x.factory.restore('ab'.repeat(32), { ...x.entry, status: 'READY', swapId: runtime.swapId });
+    assert.ok(restored); assert.equal(restored.api.list(x.entry.ownerId)[0]!.payment.valueSats, 50000); assert.equal(x.counts().creates, 1);
+    await restored.close();
+  } finally { await x.cleanup(); }
+});
 
 test('native self-service prepares/restores encrypted custody and one invoice, authorizes review without any payer/sign/broadcast/mining assembly', { skip: !linux }, async () => {
   const x = await fixture(); try {

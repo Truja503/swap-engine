@@ -45,6 +45,7 @@ export function createJustInTimeReverse(store: Store, value: PreparationSpec, re
   const initialDb = store.read(); const prep = initialDb.reversePreparations?.[spec.id];
   if (!prep?.plan || !prep.swapId || prep.status !== 'READY' || !prep.invoiceAttempt?.wireAuthorized || prep.specDigest !== preparationDigest(spec)) throw fail();
   const priorPlan = verifyReverseTestPlan(prep.plan); const initial = initialDb.swaps[prep.swapId];
+  if (spec.sourceAmountSats !== undefined && priorPlan.quote.invoiceSats !== spec.sourceAmountSats) throw fail();
   const expected = createReverseTestPlan(priorPlan.quote, spec.tipHeight, spec.client, spec.refundPublicKey,
     { claim: spec.claimDestination, refund: spec.refundDestination }, { provider: spec.providerNode, payer: spec.payerNode }, spec.routing);
   expected.createdAt = priorPlan.createdAt;
@@ -69,10 +70,10 @@ export function createJustInTimeReverse(store: Store, value: PreparationSpec, re
   };
   const verifyInvoice = async (invoice: Invoice, minimumLifeMs: number) => {
     if (invoice.state !== 'OPEN' || invoice.payment_request !== initial.invoice || invoice.r_hash !== Buffer.from(spec.client.paymentHash, 'hex').toString('base64') ||
-      invoice.value !== '50750' || invoice.amt_paid_sat !== '0' || (invoice.htlcs?.length ?? 0) !== 0) throw fail();
+      invoice.value !== String(priorPlan.quote.invoiceSats) || invoice.amt_paid_sat !== '0' || (invoice.htlcs?.length ?? 0) !== 0) throw fail();
     const raw = await readers.payer.call(`/v1/payreq/${invoice.payment_request}`);
     verifyDecodedHoldInvoice(invoice.payment_request, raw, { paymentHash: spec.client.paymentHash, payeePublicKey: spec.providerNode,
-      invoiceSats: 50750, minFinalCltv: 80 }, wall());
+      invoiceSats: priorPlan.quote.invoiceSats, minFinalCltv: 80 }, wall());
     const decoded = z.object({ timestamp: z.string().regex(/^[0-9]+$/), expiry: z.string().regex(/^[0-9]+$/) }).parse(raw);
     const invoiceExpiresAt = (BigInt(decoded.timestamp) + BigInt(decoded.expiry)) * 1000n;
     if (invoiceExpiresAt <= BigInt(wall() + minimumLifeMs)) throw fail();
@@ -131,7 +132,8 @@ export function createJustInTimeReverse(store: Store, value: PreparationSpec, re
       };
       try {
         if (authority.startBefore <= wall() || clock.monotonic() >= prepDeadline) throw fail();
-        const quotedAt = wall(); const quote = await new SwapManager(store).quote(50000, quotedAt);
+        const quotedAt = wall(); const manager = new SwapManager(store);
+        const quote = spec.sourceAmountSats === undefined ? await manager.quote(50000, quotedAt) : await manager.quoteInvoice(spec.sourceAmountSats, quotedAt);
         owned('INTENT');
         if (quote.expiresAt !== quotedAt + 120000) throw fail();
         for (const key of ['amountSats', 'serviceFeeSats', 'invoiceSats', 'fundingReserveSats', 'claimFeeSats'] as const) {
@@ -158,7 +160,7 @@ export function createJustInTimeReverse(store: Store, value: PreparationSpec, re
           readiness.tipHeight > spec.tipHeight + 10 || readiness.funding.txid !== spec.input.txid || readiness.funding.vout !== spec.input.vout ||
           readiness.funding.valueSats !== spec.input.valueSats || readiness.funding.confirmed !== true || readiness.funding.safe !== true || readiness.funding.spendable !== true) throw fail();
         verifyDecodedHoldInvoice(initial.invoice!, readiness.decodedInvoice, { paymentHash: spec.client.paymentHash, payeePublicKey: spec.providerNode,
-          invoiceSats: 50750, minFinalCltv: 80 }, wall());
+          invoiceSats: priorPlan.quote.invoiceSats, minFinalCltv: 80 }, wall());
         const fresh = await bounded(proof, prepDeadline, stop);
         if (!same(fresh.invoice, checked.invoice) || !same(store.read().swaps[initial.id], quotedSwap) || quote.expiresAt - wall() < 90000 ||
           clock.monotonic() >= prepDeadline || authority.startBefore <= wall()) throw fail();

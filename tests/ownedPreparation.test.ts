@@ -50,7 +50,7 @@ async function fixture() {
       creates++;
       const disk = JSON.parse(await readFile(join(catalogPath, 'state.json'), 'utf8'));
       assert.equal(disk.ownedPreparations[id].status, 'INTENT'); assert.equal(disk.ownedPreparations[id].attemptId, entry.attemptId);
-      await prepareHook(); const f = await preparationFixture(); attempts.set(id, f); await f.harness().prepare();
+      await prepareHook(); const f = await preparationFixture(entry.sourceAmountSats); attempts.set(id, f); await f.harness().prepare();
       if (lose) throw Error('synthetic-private-lost-preparation-ack'); return build(f, true);
     },
     async restore(id) { restores++; const f = attempts.get(id); return f ? build(f, false) : undefined; },
@@ -92,6 +92,22 @@ test('admin preparation requires exact owner, cookie, origin, CSRF, amount and i
       assert.equal((await x.request('/v1/reverse/preparations', owner, body)).status, 400);
     assert.equal((await x.request('/v1/reverse/preparations', owner, { amountSats: 50000 }, 'bad')).status, 400);
     assert.deepEqual(x.counts(), { creates: 0, restores: 0, executes: 0, reviews: 0 }); assert.deepEqual(await readFile(x.accounts), before);
+  } finally { await x.cleanup(); }
+});
+
+test('quote and durable preparation bind the selected debit and reject changed replay', async () => {
+  const x = await fixture(); try {
+    const h = await x.login();
+    const quote = await x.request('/v1/quotes', h, { amountSats: 50000 }); assert.equal(quote.status, 201);
+    const terms = await quote.json();
+    assert.deepEqual([terms.invoiceSats, terms.serviceFeeSats, terms.claimFeeSats, terms.amountSats - terms.claimFeeSats], [50000, 750, 500, 48750]);
+    assert.equal((await x.request('/v1/quotes', h, { amountSats: 50001 })).status, 400);
+    const initial = await x.request('/v1/reverse/preparations', h, { amountSats: 25000 }, 'amount-binding-key');
+    const admitted = await initial.json(); const ready = await x.wait(admitted.id, h); assert.equal(ready.status, 'READY');
+    assert.equal(x.catalog.read().ownedPreparations![admitted.id]!.sourceAmountSats, 25000);
+    const view = await (await x.request('/v1/swaps/' + ready.swapId, h)).json(); assert.equal(view.payment.valueSats, 25000);
+    assert.equal((await x.request('/v1/reverse/preparations', h, { amountSats: 50000 }, 'amount-binding-key')).status, 409);
+    assert.equal(x.counts().creates, 1);
   } finally { await x.cleanup(); }
 });
 

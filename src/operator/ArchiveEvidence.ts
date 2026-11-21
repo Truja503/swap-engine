@@ -5,6 +5,7 @@ import type { PreparationSpec } from '../core/ReversePreparation.js';
 import type { ReadOnlyBitcoinClient } from '../diagnostics/ReadOnlyClients.js';
 import { verifyHtlcSpend } from '../bitcoin/SpendEvidence.js';
 import { operatorStopped } from './OperatorFiles.js';
+import { invoiceBudget } from '../core/SwapManager.js';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const height = z.number().int().nonnegative().max(499999999);
@@ -18,11 +19,12 @@ const observationSchema = z.object({ fromHeight: height, height, blockHash: hash
 export async function verifyArchivedChain(db: Database, spec: PreparationSpec, ownerId: string, destination: string,
   bitcoin: Pick<ReadOnlyBitcoinClient, 'call' | 'confirmed'>) {
   const swaps = Object.values(db.swaps); const swap = swaps[0];
+  const expected = spec.sourceAmountSats === undefined ? { amountSats: 50000, invoiceSats: 50750, serviceFeeSats: 750, claimFeeSats: 500, fundingReserveSats: 1000 } : invoiceBudget(spec.sourceAmountSats);
   if (db.schema !== 1 || swaps.length !== 1 || !swap || swap.state !== 'COMPLETED' || swap.clientPayment?.status !== 'SUCCEEDED' ||
     !swap.lockup || !swap.claimTxid || db.ownedReverse?.owners[swap.id]?.ownerId !== ownerId ||
     db.ownedReverse.owners[swap.id]!.claimDestination !== destination || swap.contract.paymentHash !== spec.client.paymentHash ||
     swap.contract.claimPublicKey !== spec.client.claimPublicKey || swap.contract.refundPublicKey !== spec.refundPublicKey ||
-    swap.contract.timeoutHeight !== spec.tipHeight + 30 || swap.quote.amountSats !== 50000 || swap.quote.claimFeeSats !== 500) throw operatorStopped();
+    swap.contract.timeoutHeight !== spec.tipHeight + 30 || Object.entries(expected).some(([key, amount]) => swap.quote[key as keyof typeof expected] !== amount)) throw operatorStopped();
   const observed = observationSchema.parse(db.chainObservations?.[`${swap.lockup.txid}:${swap.lockup.vout}`]);
   if (observed.spend.txid !== swap.claimTxid || observed.fromHeight > observed.spend.height || observed.spend.height > observed.height) throw operatorStopped();
   const before = chainSchema.parse(await bitcoin.call('getblockchaininfo'));
@@ -37,8 +39,8 @@ export async function verifyArchivedChain(db: Database, spec: PreparationSpec, o
   if (funding.confirmations < 1 || claim.confirmations < 1) throw operatorStopped();
   const fundingTx = Transaction.fromHex(funding.hex); const claimTx = Transaction.fromHex(claim.hex);
   const verified = verifyHtlcSpend(claim.hex, swap.claimTxid, funding.hex, swap.lockup.vout, swap.contract);
-  if (verified.kind !== 'claim' || fundingTx.getId() !== swap.lockup.txid || fundingTx.outs[swap.lockup.vout]?.value !== 50000n ||
-    claimTx.ins.length !== 1 || claimTx.outs.length !== 1 || claimTx.outs[0]!.value !== 49500n ||
+  if (verified.kind !== 'claim' || fundingTx.getId() !== swap.lockup.txid || fundingTx.outs[swap.lockup.vout]?.value !== BigInt(expected.amountSats) ||
+    claimTx.ins.length !== 1 || claimTx.outs.length !== 1 || claimTx.outs[0]!.value !== BigInt(expected.amountSats - expected.claimFeeSats) ||
     !Buffer.from(claimTx.outs[0]!.script).equals(Buffer.from(address.toOutputScript(destination, networks.regtest))) ||
     JSON.stringify(chainSchema.parse(await bitcoin.call('getblockchaininfo'))) !== JSON.stringify(before)) throw operatorStopped();
   return { id: swap.id, revision: swap.revision, fundingTxid: swap.lockup.txid, claimTxid: swap.claimTxid,

@@ -12,6 +12,21 @@ import type { Invoice } from '../src/lightning/LndClient.js';
 
 import { preparationFixture as fixture } from './preparationFixture.js';
 
+test('the selected Lightning amount binds invoice, fees and on-chain principal', async () => {
+  for (const amount of [11000, 25000, 50000]) {
+    const x = await fixture(amount);
+    try {
+      const result = await x.harness().prepare(); const quote = result.plan.quote;
+      assert.equal(quote.invoiceSats, amount);
+      assert.equal(quote.serviceFeeSats, 500 + Math.ceil(amount / 200));
+      assert.equal(quote.amountSats, amount - quote.serviceFeeSats);
+      assert.equal(quote.amountSats - quote.claimFeeSats, amount - quote.serviceFeeSats - 500);
+      assert.equal(x.posts(), 1);
+      await x.reopen(); assert.deepEqual(await x.harness().prepare(), result); assert.equal(x.posts(), 1);
+    } finally { await x.cleanup(); }
+  }
+});
+
 test('one exact quote supplies the plan, swap, durable invoice intent and stable unapproved execution request', async () => {
   const x = await fixture();
   try {

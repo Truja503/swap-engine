@@ -27,6 +27,7 @@ export type ChainObservation = { fromHeight: number; height: number; blockHash: 
   spend?: { txid: string; blockHash: string; height: number } };
 export type Database = { schema: 1; quotes: Record<string, Quote>; swaps: Record<string, Swap>;
   ownedPreparations?: Record<string, { ownerId: string; fingerprint: string; attemptId: string; createdAt: number;
+    sourceAmountSats?: number;
     status: 'INTENT' | 'READY' | 'UNKNOWN' | 'COMPLETED' | 'EXPIRED' | 'REJECTED'; swapId?: string;
     reviews?: Record<string, { attemptId: string; status: 'INTENT' | 'READY' | 'UNKNOWN' }> }>;
   ownedReverse?: { owners: Record<string, { ownerId: string; paymentHash: string; claimDestination: string; contractDigest: string }>;

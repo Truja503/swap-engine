@@ -124,9 +124,9 @@ export const api = {
   }),
   reverseAvailability: (signal: AbortSignal) => request('/v1/reverse/availability', reverseAvailability, { signal }),
   preparation: (id: string, signal: AbortSignal) => request('/v1/reverse/preparations/' + encodeURIComponent(id), preparation, { signal }),
-  prepare(key: string, csrf: string) {
+  prepare(key: string, csrf: string, amountSats: number) {
     return request('/v1/reverse/preparations', preparation, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key }, body: JSON.stringify({ amountSats: 50000 }) });
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key }, body: JSON.stringify({ amountSats }) });
   },
   reviewPreparation(id: string, key: string, csrf: string) {
     return request('/v1/reverse/preparations/' + encodeURIComponent(id) + '/review', preparation, { method: 'POST',
@@ -168,10 +168,10 @@ export const api = {
   },
 };
 
-export function quoteTotals(quote: Quote, amount: number, now = Date.now()) {
+export function quoteTotals(quote: Quote, amount: number, now = Date.now(), sourceAmount = false) {
   const amounts = [quote.amountSats, quote.invoiceSats, quote.serviceFeeSats, quote.claimFeeSats];
   if (!amounts.every(n => Number.isSafeInteger(n) && n >= 0)
-    || quote.amountSats !== amount || quote.invoiceSats !== quote.amountSats + quote.serviceFeeSats
+    || (sourceAmount ? quote.invoiceSats !== amount : quote.amountSats !== amount) || quote.invoiceSats !== quote.amountSats + quote.serviceFeeSats
     || quote.claimFeeSats > quote.amountSats || quote.expiresAt <= now) {
     throw new Error('The backend returned an invalid or expired estimate.');
   }

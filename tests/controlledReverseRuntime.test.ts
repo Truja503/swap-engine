@@ -191,14 +191,18 @@ test('assembled runtime completes through actual adapters with durable per-actio
   } finally { await x.cleanup(); }
 });
 
-test('spent or unavailable HTLC outpoint blocks signing and later claim broadcast', async () => {
-  for (const failureAt of [1, 3]) {
+test('spent or inconsistent HTLC outpoint blocks signing and claim broadcast', async () => {
+  for (const failureAt of [1, 3, 4]) {
     const x = await fixture();
     try {
       const call = x.deps.bitcoin.call.bind(x.deps.bitcoin); let checks = 0;
       x.deps.bitcoin.call = async <T>(method: string, params: unknown[] = [], wallet = false): Promise<T> => {
         const lockup = x.store.read().swaps[x.f.swap.id]?.lockup;
-        if (method === 'gettxout' && lockup && params[0] === lockup.txid && ++checks === failureAt) return null as T;
+        if (method === 'gettxout' && lockup && params[0] === lockup.txid && ++checks === failureAt) {
+          if (failureAt !== 4) return null as T;
+          const coin = await call<Record<string, unknown>>(method, params, wallet);
+          return { ...coin, bestblock: 'ff'.repeat(32) } as T;
+        }
         return call<T>(method, params, wallet);
       };
       await assert.rejects(x.runtime().execute());

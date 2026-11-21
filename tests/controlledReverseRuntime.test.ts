@@ -191,6 +191,26 @@ test('assembled runtime completes through actual adapters with durable per-actio
   } finally { await x.cleanup(); }
 });
 
+test('spent or unavailable HTLC outpoint blocks signing and later claim broadcast', async () => {
+  for (const failureAt of [1, 3]) {
+    const x = await fixture();
+    try {
+      const call = x.deps.bitcoin.call.bind(x.deps.bitcoin); let checks = 0;
+      x.deps.bitcoin.call = async <T>(method: string, params: unknown[] = [], wallet = false): Promise<T> => {
+        const lockup = x.store.read().swaps[x.f.swap.id]?.lockup;
+        if (method === 'gettxout' && lockup && params[0] === lockup.txid && ++checks === failureAt) return null as T;
+        return call<T>(method, params, wallet);
+      };
+      await assert.rejects(x.runtime().execute());
+      assert.equal(checks, failureAt);
+      assert.equal(x.mutations.filter(key => key.startsWith('broadcast:')).length, 1);
+      assert.equal(x.mutations.includes('settle'), false);
+      assert.equal(x.store.read().controlledExecutions![x.approval.id]!.status, 'UNKNOWN');
+      await assert.rejects(x.runtime().execute()); assert.equal(x.sends(), 1);
+    } finally { await x.cleanup(); }
+  }
+});
+
 test('lost wallet, broadcast, mining and settlement replies remain one-shot across assembly and store restart', async () => {
   for (const point of ['walletcreatefundedpsbt', 'walletprocesspsbt', 'finalizepsbt', 'funding broadcast', 'claim broadcast', 'mining', 'settle']) {
     const x = await fixture();

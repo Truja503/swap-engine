@@ -163,6 +163,20 @@ export function createControlledReverseRuntime(store: Store, suppliedPlan: Rever
     if (funding.hex !== swap.lockup.hex) throw unavailable();
     return funding;
   };
+  const availableFundingOutpoint = async (swap: Swap) => {
+    if (!swap.lockup) throw unavailable();
+    const funding = await confirmedFunding(swap);
+    if (!Number.isSafeInteger(funding.confirmations) || funding.confirmations < 1) throw unavailable();
+    const tx = Transaction.fromHex(funding.hex);
+    const output = tx.outs[swap.lockup.vout];
+    if (tx.getId() !== swap.lockup.txid || !output || output.value !== BigInt(plan.quote.amountSats)) throw unavailable();
+    const coin = z.object({ bestblock: hash, confirmations: z.number().int().positive(),
+      value: z.number().finite().nonnegative(), scriptPubKey: z.object({ hex: z.string().regex(/^[a-f0-9]+$/) }) })
+      .parse(await bitcoin.call('gettxout', [swap.lockup.txid, swap.lockup.vout, true]));
+    const chain = chainSchema.parse(await bitcoin.call('getblockchaininfo'));
+    if (coin.bestblock !== chain.bestblockhash || coin.value !== plan.quote.amountSats / 1e8 ||
+      coin.scriptPubKey.hex !== Buffer.from(output.script).toString('hex')) throw unavailable();
+  };
   const held = async (swap: Swap) => {
     const chain = await nodes();
     if (chain.blocks > plan.contract.timeoutHeight - 10) throw unavailable();
@@ -176,11 +190,12 @@ export function createControlledReverseRuntime(store: Store, suppliedPlan: Rever
     controls: { claimDestination: plan.claimDestination,
       startPayment: (swap: Swap) => payment.startPayment(swap), waitAccepted: (swap: Swap) => payment.waitAccepted(swap),
       signClaim: async (swap: Swap) => {
-        const snapshot = JSON.stringify(swap); await held(swap); await confirmedFunding(swap);
+        const snapshot = JSON.stringify(swap); await held(swap); await availableFundingOutpoint(swap);
         if (JSON.stringify(runContext(true).swap) !== snapshot || swap.state !== 'LOCKUP_CONFIRMED' || swap.clientClaimIntent) throw unavailable();
         let client: ClaimWallet | undefined;
         try {
           client = await ClaimWallet.restore(deps.clientVault, plan.contract.paymentHash);
+          await held(swap); await availableFundingOutpoint(swap);
           if (client.claimPublicKey !== plan.contract.claimPublicKey || JSON.stringify(runContext(true).swap) !== snapshot) throw unavailable();
           return exactClaim(client.signClaim({ contract: plan.contract, lockupTxHex: swap.lockup!.hex, vout: swap.lockup!.vout,
             destination: plan.claimDestination, feeSats: plan.quote.claimFeeSats }).toHex(), swap);
@@ -194,11 +209,11 @@ export function createControlledReverseRuntime(store: Store, suppliedPlan: Rever
             current.clientClaimIntent.txid !== tx.getId() || current.clientClaimIntent.destination !== plan.claimDestination ||
             current.clientClaimIntent.feeSats !== plan.quote.claimFeeSats) throw unavailable();
         };
-        await held(swap); await confirmedFunding(swap); verify(runContext(true).swap);
+        await held(swap); await availableFundingOutpoint(swap); verify(runContext(true).swap);
         const accepted = z.array(z.object({ txid: hash, allowed: z.literal(true) })).length(1)
           .parse(await bitcoin.call('testmempoolaccept', [[raw]]));
         if (accepted[0]!.txid !== tx.getId()) throw unavailable();
-        await held(swap);
+        await held(swap); await availableFundingOutpoint(swap);
         return once(`broadcast:${tx.getId()}`, verify, async () => {
           const result = await deps.bitcoin.call<string>('sendrawtransaction', [raw]);
           if (result !== tx.getId()) throw unavailable(); return result;
